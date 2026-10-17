@@ -38,6 +38,15 @@ class ModelRegistry:
         self.settings = settings
         self._cache: dict[str, ChatModel] = {}
 
+    def register(self, alias: str, model: ChatModel) -> None:
+        """Install a pre-built model under an alias.
+
+        For embedding and demos: a caller that already holds a model should not
+        have to describe it in settings first, and a scripted model has no
+        settings shape that could describe it.
+        """
+        self._cache[alias] = model
+
     def aliases(self) -> list[str]:
         return sorted(self.settings.models)
 

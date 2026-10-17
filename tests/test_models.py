@@ -477,3 +477,48 @@ class TestStreamingProvider:
             response = await self._model()._stream(client, {}, lambda _: None)
 
         assert response.content == "ok"
+
+
+class TestScriptedMock:
+    """A script is a conversation, not a plan.
+
+    The mock used to answer a structured call (planning) with the first
+    scripted step. The planner therefore produced `write_file` as its "plan",
+    the tool call never ran, and the run finished with the script untouched --
+    which is the worst kind of test-suite-lie: green, and proving nothing.
+    """
+
+    def _scripted(self) -> MockModel:
+        return MockModel(
+            ModelSpec(provider="mock", model="demo"),
+            script=[{"tool_calls": [{"name": "read_file", "arguments": {"path": "x.py"}}]}],
+        )
+
+    async def test_a_structured_call_is_answered_as_a_plan(self) -> None:
+        model = self._scripted()
+        response = await model._chat(
+            [],
+            tools=None,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_output_tokens=512,
+        )
+        assert not response.tool_calls, "the planner consumed the script"
+
+    async def test_the_script_survives_to_the_tool_call(self) -> None:
+        model = self._scripted()
+        await model._chat(
+            [],
+            tools=None,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_output_tokens=512,
+        )
+        response = await model._chat(
+            [],
+            tools=[{"function": {"name": "read_file"}}],
+            temperature=0.0,
+            response_format=None,
+            max_output_tokens=512,
+        )
+        assert [call.name for call in response.tool_calls] == ["read_file"]

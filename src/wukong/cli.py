@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from wukong import __version__
 from wukong.agent.factory import build_agent, default_skill_dirs
 from wukong.agent.state import TaskStatus
+from wukong.demo import run_review_demo
 from wukong.observability.events import EventType
 from wukong.config import (
     ConfigEditor,
@@ -2476,8 +2477,28 @@ def demo(
     goal: str = typer.Argument("查看当前目录下的 Python 文件并总结"),
     home: Optional[Path] = typer.Option(None, "--home"),
     workspace: Optional[Path] = typer.Option(None, "--workspace"),
+    review: bool = typer.Option(
+        False,
+        "--review",
+        help=(
+            "演示逐块审查：Agent 提议一个「一半对一半错」的改动，你只接受其中一块，"
+            "然后当场核对磁盘上的文件。不需要 API key。"
+        ),
+    ),
 ) -> None:
     """用离线 mock 模型跑一遍端到端，不需要 API key。"""
+    if review:
+        # A separate flow, not a flag on this one: the point is a different
+        # thing. The default demo shows the loop; this one shows the gate, and
+        # the gate is the reason to use this runtime at all.
+        settings = _settings(home, workspace)
+        try:
+            result = run_review_demo(settings, console=console)
+        except RuntimeError as exc:
+            err_console.print(f"[red]demo failed[/red] {exc}")
+            raise typer.Exit(4) from exc
+        raise typer.Exit(0 if result.proved else 5)
+
     settings = _settings(home, workspace)
 
     async def _run() -> int:

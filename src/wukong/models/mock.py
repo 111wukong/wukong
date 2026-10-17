@@ -64,13 +64,20 @@ class MockModel(ChatModel):
         max_output_tokens: int,
         stream=None,
     ) -> ModelResponse:
+        if response_format:
+            # Structured output first, script second.
+            #
+            # Planning is a structured call, so the old order made the planner
+            # eat the first scripted step: the "plan" came back as `write_file`,
+            # the tool call never happened, and the run finished with the script
+            # untouched. A script is a conversation, not a plan -- and the two
+            # kinds of call are not interchangeable.
+            return self._structured(messages, response_format)
+
         if self._script is not None and self._script_index < len(self._script):
             step = self._script[self._script_index]
             self._script_index += 1
             return self._from_script(step)
-
-        if response_format:
-            return self._structured(messages, response_format)
 
         if tools:
             heuristic = self._heuristic(messages, tools)

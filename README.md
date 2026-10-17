@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/111wukong/wukong/actions/workflows/ci.yml/badge.svg)](https://github.com/111wukong/wukong/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/111wukong/wukong)
-[![tests](https://img.shields.io/badge/tests-967%20offline-brightgreen)](https://github.com/111wukong/wukong)
+[![tests](https://img.shields.io/badge/tests-976%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **本地优先的 AI Agent 运行时。它只有一条核心主张：不在没有证据的情况下说「做完了」。**
@@ -66,9 +66,20 @@ wukong config set agent.verify_command "pytest -q"
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/wukong init
-.venv/bin/wukong demo            # 离线端到端演示，不需要任何 API key
+.venv/bin/wukong demo --review   # 不用 API key，20 秒看到上面第一节
 .venv/bin/wukong serve           # 控制台 http://127.0.0.1:8000/
 ```
+
+`demo --review` 做一件事：一个「一半对一半错」的改动被提出来，你只接受其中一块，然后它把磁盘上的文件打印出来，逐块核对是否写入。
+
+```
+  h0  ✔ 已写入
+  h1  ✔ 不在文件里
+
+这就是全部区别：被拒绝的改动不是被撤销的，是从来没有存在过。
+```
+
+这是整件事里最容易被当成口号的一句，所以它必须能被执行。非交互环境（管道、CI）下默认只接受第一块，方便写脚本验证。
 
 接一个真实模型（任意 OpenAI 兼容端点：OpenAI / DeepSeek / 通义千问 / Ollama / LM Studio / vLLM）：
 
@@ -827,7 +838,7 @@ A2A **两个方向都默认关闭**：发布一个接受别的 Agent 派活儿�
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest -q                       # 967 条，全部离线，不需要 API key
+.venv/bin/python -m pytest -q                       # 976 条，全部离线，不需要 API key
 .venv/bin/python -m pytest tests/test_resume_semantics.py -v
 .venv/bin/ruff check src tests
 ```
