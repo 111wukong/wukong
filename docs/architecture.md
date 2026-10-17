@@ -205,6 +205,10 @@ read_only → write_local → execute_local → network → external_side_effect
 
 同一次运行抓出两个真 bug，都已修（`config.py` 的部分权限覆盖、`shell.py` 的退出码缺失），见 `tests/test_config_round_trip.py::TestPartialPermissionOverrides` 与 `tests/test_tools.py::TestFailedCommandsCarryAnExitCode`。
 
+复跑时又暴露一个：**`run_tests` 在无 venv 的工作区根本跑不起来**——回退到裸 `pytest`，而清洗过的子进程 PATH 上没有它，于是「用来跑测试的工具」以 `command not found` 收场，模型只好退回 `run_command`（恰恰是它文档里让它别做的事）。现在回退链是：项目 venv 的 pytest → venv 自己的 `python -m pytest` → **运行中的解释器**（`pip install -e ".[dev]"` 就是把 pytest 装在那里）。修完之后复跑，`run_tests` 成为任务的第一步并真的跑了起来（exit 1 = 找到了那个失败，这正是它该做的事）。
+
+值得记的是修这次时自己先写错了一版：`if "pytest" in argv` 是**成员判断**不是子串判断，`"pytest" in ["/x/.venv/bin/pytest"]` 是 False，导入路径被静默跳过，收集阶段以一个「看起来像测试文件坏了」的 ImportError 死掉。一个**真的执行工具**的既有测试立刻抓住了它——这就是为什么那个测试值得存在。
+
 ## 9. 测试策略
 
 1000 条测试，全部离线，不需要 API key。分三类，各自守不同的东西：
