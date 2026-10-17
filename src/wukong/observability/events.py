@@ -75,6 +75,12 @@ class EventType(str, Enum):
     CONFIRMATION_GRANTED = "confirmation_granted"
     CONFIRMATION_DENIED = "confirmation_denied"
 
+    # verification. The project's own check, run before the run is allowed to
+    # claim success -- "it compiled" is not "it works", and the gap between
+    # them is where an agent's confidence stops being evidence.
+    VERIFY_STARTED = "verify_started"
+    VERIFY_FINISHED = "verify_finished"
+
     # context
     CONTEXT_COMPACTED = "context_compacted"
 

@@ -212,6 +212,16 @@ class ToolRunner:
                 "duration_ms": duration_ms,
                 "truncated": truncated,
                 "artifact_path": result.artifact_path,
+                # Scalars only. The point is that a reader can answer "which
+                # file did this touch" from the event stream alone, without
+                # joining the log -- which compaction may have trimmed. Lists
+                # and nested objects are dropped rather than truncated: half a
+                # structure is worse than none, and nothing here needs one.
+                "metadata": {
+                    key: value
+                    for key, value in (result.metadata or {}).items()
+                    if isinstance(value, (str, int, float, bool))
+                },
             },
         )
 

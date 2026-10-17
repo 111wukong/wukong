@@ -326,6 +326,24 @@ async function decide(verb) {
 
 /* ---------------------------------------------------------------- status */
 
+/* A run can end while its own check is red. Saying "completed" alone is how
+ * that fact gets lost, so the header carries it next to the status. */
+function paintVerifyChip(task) {
+  const bar = $("topbar-meta");
+  if (!bar) return;
+  let chip = bar.querySelector(".verify-chip");
+  const failed = task?.verify && task.verify.passed === false;
+  if (!failed) {
+    if (chip) chip.remove();
+    return;
+  }
+  if (!chip) {
+    chip = el("span", "chip chip-danger verify-chip", "验证未通过");
+    bar.append(chip);
+  }
+  chip.title = `${task.verify.command || ""} · exit ${task.verify.exit_code ?? "?"}`;
+}
+
 function updateStatusline(task = null) {
   const bar = $("statusline");
   if (!bar) return;
@@ -376,6 +394,7 @@ async function pollStatus() {
       const task = await json(`/api/v1/tasks/${state.taskId}`);
       palette.setContext({ hasTask: true, hasTranscript: true });
       renderBudget(task);
+      paintVerifyChip(task);
       updateStatusline(task);
       if (task.pending_confirmation && !pendingInterrupt) {
         handleApproval({

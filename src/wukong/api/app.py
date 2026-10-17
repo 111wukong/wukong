@@ -1005,6 +1005,9 @@ def _task_view(svc: Service, task_id: str) -> dict[str, Any]:
         # tokens across steps while its prompt sits comfortably at 20k.
         "context": _context(state, svc, task_id),
         "plan_approved": state.plan_approved,
+        # The last check, so a client can say "finished, but the tests are
+        # still red" instead of only "finished".
+        "verify": state.last_verify,
         "pending_kind": state.pending_confirmation.kind if state.pending_confirmation else None,
     }
 

@@ -633,6 +633,51 @@ function renderCustom(event) {
     run.assistant?.append(warn);
   }
 
+  if (event.name === "verify_started") {
+    const card = el("section", "verify-card running");
+    const head = el("div", "verify-head");
+    head.append(el("span", "verify-mark", "◐"));
+    head.append(el("span", "verify-title", "验证"));
+    head.append(el("span", "verify-command", event.value?.command || ""));
+    card.append(head);
+    run.assistant?.append(card);
+    run.verify = card;
+    setActivity(`正在验证：${event.value?.command || ""}`);
+    scrollToBottom();
+  }
+
+  if (event.name === "verify_result") {
+    const value = event.value || {};
+    const card = run.verify || el("section", "verify-card");
+    if (!run.verify) run.assistant?.append(card);
+    card.className = `verify-card ${value.passed ? "ok" : "failed"}`;
+    card.replaceChildren();
+
+    const head = el("div", "verify-head");
+    head.append(el("span", "verify-mark", value.passed ? "✓" : "✕"));
+    head.append(el("span", "verify-title", value.passed ? "验证通过" : "验证失败"));
+    head.append(el("span", "verify-command", value.command || ""));
+    const meta = [];
+    if (value.exit_code !== null && value.exit_code !== undefined) {
+      meta.push(`exit ${value.exit_code}`);
+    }
+    if (value.duration_ms) meta.push(duration(value.duration_ms));
+    if (meta.length) head.append(el("span", "verify-meta", meta.join(" · ")));
+    card.append(head);
+
+    const tail = String(value.output_tail || "").trim();
+    if (tail) {
+      const body = el("pre", "verify-output");
+      body.textContent = tail;
+      card.append(body);
+      if (!value.passed) card.classList.add("open");
+      head.onclick = () => card.classList.toggle("open");
+    }
+    run.verify = null;
+    setActivity("");
+    scrollToBottom();
+  }
+
   if (event.name === "stream_idle") setStatus("waiting", true);
   if (event.name === "stream_notice") setStatus("resyncing", true);
   if (event.name === "budget_exceeded") {

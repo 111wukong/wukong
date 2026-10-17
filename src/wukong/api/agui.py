@@ -424,6 +424,20 @@ class AgUiEncoder:
         self._pending = None
         return []
 
+    def _on_verify_started(self, event: Event) -> list[dict[str, Any]]:
+        # A real step, not a custom event: the check is part of the run and
+        # the timeline should show it next to the tool calls it is checking.
+        return [
+            step_started("verify"),
+            custom("verify_started", event.payload),
+        ]
+
+    def _on_verify_finished(self, event: Event) -> list[dict[str, Any]]:
+        return [
+            custom("verify_result", event.payload),
+            step_finished("verify"),
+        ]
+
     def _on_context_compacted(self, event: Event) -> list[dict[str, Any]]:
         return [
             custom(

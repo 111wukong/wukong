@@ -1797,3 +1797,53 @@ kbd {
   border-top: 1px solid var(--border);
 }
 .rewind-note { flex: 1; font-size: 11.5px; color: var(--text-faint); }
+
+/* verification ---------------------------------------------------------- */
+
+.verify-card {
+  margin: 2px 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.verify-card.ok { border-color: rgba(62, 207, 142, 0.28); }
+.verify-card.failed { border-color: rgba(242, 104, 95, 0.34); }
+.verify-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.verify-mark { width: 12px; flex: none; text-align: center; font-family: var(--mono); color: var(--text-faint); }
+.verify-card.running .verify-mark { color: var(--accent); animation: blink 1.1s steps(2, start) infinite; }
+.verify-card.ok .verify-mark { color: var(--ok); }
+.verify-card.failed .verify-mark { color: var(--danger); }
+.verify-title { font-weight: 600; color: var(--text-dim); flex: none; }
+.verify-card.ok .verify-title { color: var(--ok); }
+.verify-card.failed .verify-title { color: var(--danger); }
+.verify-command {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.verify-meta { margin-left: auto; font: 500 10.5px/1 var(--mono); color: var(--text-faint); flex: none; }
+.verify-output {
+  display: none;
+  margin: 0;
+  padding: 8px 11px;
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  font: 400 11.5px/1.6 var(--mono);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.verify-card.open .verify-output { display: block; }

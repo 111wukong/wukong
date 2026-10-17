@@ -140,6 +140,19 @@ def _progress_printer(quiet: bool):
             )
         elif kind == "compacted":
             console.print("[dim]context compacted[/dim]")
+        elif kind == "plan_approval":
+            console.print("[yellow]plan needs approval[/yellow]")
+            for i, step in enumerate(payload["steps"], 1):
+                console.print(f"  [dim]{i}.[/dim] {escape(str(step.get('description', '')))}")
+            console.print(
+                "[dim]approve with[/dim] wukong task approve <id> "
+                "[dim]or deny with[/dim] wukong task deny <id>"
+            )
+        elif kind == "verify_started":
+            console.print(f"  [dim]verify[/dim] {escape(str(payload['command']))}")
+        elif kind == "verify_finished":
+            mark = "[green]passed[/green]" if payload["passed"] else "[red]failed[/red]"
+            console.print(f"  [dim]verify[/dim] {mark}")
         elif kind == "confirmation":
             console.print(
                 f"  [yellow]needs approval[/yellow] {escape(str(payload['effect']))}: "

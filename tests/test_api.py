@@ -1602,3 +1602,71 @@ class TestRewind:
     def test_an_unknown_task_is_a_404(self, api) -> None:  # noqa: ANN001
         with api([]) as client:
             assert client.get("/api/v1/tasks/nope/rewind").status_code == 404
+
+
+class TestVerificationOnTheWire:
+    """The check has to be visible, or it is indistinguishable from a hang.
+
+    The client gets `verify_started` / `verify_result` as custom events plus
+    real STEP_* boundaries, so the card in the transcript is built from the
+    same stream as everything else.
+    """
+
+    def test_a_failing_check_reaches_the_client(self, api, settings) -> None:  # noqa: ANN001
+        settings.agent.verify_command = "sh -c 'echo boom; exit 1'"
+        settings.agent.verify_max_rounds = 1
+
+        client = api(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "write_file",
+                            "arguments": {"path": "out.py", "content": "x = 1\n"},
+                        }
+                    ]
+                },
+                {"content": "done"},
+            ]
+        )
+        with client:
+            events = parse_sse(
+                client.post(
+                    "/agui",
+                    json={"messages": [{"role": "user", "content": "write it"}]},
+                ).text
+            )
+
+        types = types_of(events)
+        assert "STEP_STARTED" in types
+        results = [e for e in events if e["type"] == "CUSTOM" and e.get("name") == "verify_result"]
+        assert results, "the check ran but the client was never told"
+        value = results[0]["value"]
+        assert value["passed"] is False
+        assert value["command"] == "sh -c 'echo boom; exit 1'"
+        assert "boom" in value["output_tail"]
+
+    def test_the_task_reports_its_verify_rounds(self, api, settings) -> None:  # noqa: ANN001
+        settings.agent.verify_command = "true"
+        client = api(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "write_file",
+                            "arguments": {"path": "out.py", "content": "x = 1\n"},
+                        }
+                    ]
+                },
+                {"content": "done"},
+            ]
+        )
+        with client:
+            created = client.post("/api/v1/tasks", json={"goal": "write it"}).json()
+            task_id = created.get("task_id") or created.get("id")
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            events = client.get(f"/api/v1/tasks/{task_id}/events").json()
+
+        finished = [e for e in events if e["type"] == "verify_finished"]
+        assert len(finished) == 1
+        assert finished[0]["payload"]["passed"] is True

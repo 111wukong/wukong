@@ -446,6 +446,29 @@ class AgentConfig(BaseModel):
     # spend it: the expensive mistake is a correct execution of the wrong
     # plan, and every other gate fires after the tokens are already gone.
     require_plan_approval: bool = False
+    #: The project's own check, run before the agent is allowed to report
+    #: success. Empty means "do not verify", which is the default: a command
+    #: that runs on every task is a command the user has to have chosen.
+    #:
+    #: It comes from *user* settings, never from the workspace, and that is
+    #: the whole of its permission argument: it inherits the trust of the
+    #: shell profile that configured it, and a repository cannot smuggle a
+    #: command into a run by being cloned. It is executed through the same
+    #: tool, sandbox and scrubbed environment as `run_command` -- but not
+    #: through the permission engine, because the model did not ask for it.
+    #:
+    #: One command, no shell: `pytest -q` works, `pytest -q && rm -rf x` is
+    #: parsed as arguments to pytest and will simply not do what it looks like.
+    verify_command: str = ""
+    #: Only verify when a written path matches this glob. Empty means "any
+    #: write", which is right for a single-language project and wrong for a
+    #: monorepo where editing the docs should not run the test suite.
+    verify_match: str = ""
+    #: How many times the failure may be fed back before the run is allowed to
+    #: finish anyway. Two is enough for a real fix and short enough that a
+    #: model that cannot fix it does not spend the whole budget trying.
+    verify_max_rounds: int = 2
+    verify_timeout_s: float = 300.0
 
 
 class McpServerConfig(BaseModel):

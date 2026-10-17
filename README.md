@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/111wukong/wukong/actions/workflows/ci.yml/badge.svg)](https://github.com/111wukong/wukong/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/111wukong/wukong)
-[![tests](https://img.shields.io/badge/tests-952%20offline-brightgreen)](https://github.com/111wukong/wukong)
+[![tests](https://img.shields.io/badge/tests-967%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 一个本地优先的通用 AI Agent 运行时。Python 3.11+，SQLite，无外部服务依赖。
@@ -366,6 +366,31 @@ curl -X POST http://127.0.0.1:8000/api/v1/tasks/<id>/approve \
 ```bash
 wukong serve          # http://127.0.0.1:8000/
 ```
+
+---
+
+## 验证：完成之前先跑一遍
+
+「改完了」是这个系统里最容易撒的谎。模型改完文件，没有任何东西执行过它，然后它报告成功 —— 而工具调用全部成功、权限全部合规、预算还有富余。
+
+所以配一条命令：
+
+```bash
+wukong config set agent.verify_command "pytest -q"
+wukong config set agent.verify_match "src/**/*.py"   # 可选，只有改到这些文件才验证
+```
+
+规则只有一条：**模型说要完成时，如果这次运行写过文件而还没验证过，先跑这条命令**。
+
+- 通过 → 正常完成。
+- 失败 → **不完成**。输出尾部（测试框架把失败放在末尾，截头会丢掉断言）作为一条 `system` 记录进入上下文，循环继续，模型自己修。
+- 连续失败达到 `verify_max_rounds`（默认 2）→ 允许结束，但记录「仍然失败」并告诉模型停止尝试、如实报告。顶栏会挂一个红色的「验证未通过」，所以「已完成」不会掩盖红着的测试。
+
+**它为什么不需要审批。** 这条命令来自**用户自己的设置**，不是工作区，也不是模型 —— 它继承的是用户 shell profile 的信任级别，一个仓库不能靠被 clone 就把命令塞进你的运行里。它走的是 `run_command` 同一个实例（同一套沙箱、同一套清洗过的环境、同一个 venv PATH），但**不经过权限引擎**：模型没有发起它。反过来做——把它塞进模型的 `execute_local` 额度——意味着用户在自己配置里写了一条命令，却还要额外把 shell 权限交给模型才能用。
+
+这也是为什么它只有一条命令、没有 shell：`pytest -q && rm -rf x` 会被 `shlex.split` 拆成 pytest 的参数，不会执行。想跑组合命令，写一个脚本，把脚本路径配进来。
+
+事件是 `verify_started` / `verify_finished`，AG-UI 上是一个真正的 `STEP_STARTED("verify")` 加 `CUSTOM verify_result`，所以时间线上它和它检查的那些工具调用挨在一起。
 
 ---
 
@@ -773,7 +798,7 @@ A2A **两个方向都默认关闭**：发布一个接受别的 Agent 派活儿�
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest -q                       # 952 条，全部离线，不需要 API key
+.venv/bin/python -m pytest -q                       # 967 条，全部离线，不需要 API key
 .venv/bin/python -m pytest tests/test_resume_semantics.py -v
 .venv/bin/ruff check src tests
 ```

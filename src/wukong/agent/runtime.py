@@ -17,6 +17,8 @@ Differences from the spec's loop that matter:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import os
 import time
 import uuid
 from pathlib import Path
@@ -31,6 +33,7 @@ from wukong.agent.planner import Planner, apply_plan_update
 from wukong.agent import repetition
 from wukong.agent.repetition import call_signature
 from wukong.agent.state import (
+    WRITE_TOOLS,
     AgentState,
     LogEntry,
     PendingConfirmation,
@@ -341,12 +344,17 @@ class AgentRuntime:
             # Execute the *same* call the model chose. `approved=True` only
             # affects the scratchpad label -- the call itself is a first
             # execution, not a replay.
-            await self._runner.execute(
+            executed = await self._runner.execute(
                 ToolCall(id=pending.request_id, name=pending.tool, arguments=pending.arguments),
                 state=state,
                 ctx=self._tool_context(state),
                 approved=True,
             )
+            # The approved call runs here, not through `_run_tool_calls`, so
+            # the write has to be recorded here too -- otherwise a run whose
+            # only write was approved would finish without ever being checked.
+            if executed.success:
+                self._note_write(state, pending.tool, pending.arguments)
         elif state.denied_pending is not None:
             pending = state.denied_pending
             state.denied_pending = None
@@ -655,7 +663,10 @@ class AgentRuntime:
                     # common shape of "the output budget ran out before the
                     # model got to its answer".
                     return self._fail(state, _empty_response_reason(resp), started)
-                return self._complete(state, resp.content, started)
+                result = await self._try_complete(state, resp.content, started)
+                if result is not None:
+                    return result
+                continue
 
             # --- execute ------------------------------------------------
             try:
@@ -683,7 +694,7 @@ class AgentRuntime:
                 await self._apply_plan_tool(call, state)
                 continue
             if call.name == FINISH_TOOL:
-                result = self._finish_from_tool(call, state)
+                result = await self._finish_from_tool(call, state)
                 if result is not None:
                     return result
                 continue
@@ -703,8 +714,28 @@ class AgentRuntime:
                 self._note_repeat(entry, state, verdict)
             if call.name == SKILL_TOOL and entry.success:
                 self._note_skill_loaded(entry, state)
+            if entry.success:
+                self._note_write(state, call.name, call.arguments)
             self._progress("tool", {"name": call.name, "success": entry.success})
         return None
+
+    def _note_write(self, state: AgentState, name: str, arguments: dict[str, Any]) -> None:
+        """Remember that a write landed, for the check that runs before the end.
+
+        Kept in memory *and* folded from events, because the two paths reach
+        the same state differently: a live run never replays, and a resumed
+        run never executes. Both have to answer "did anything change since the
+        last check?".
+        """
+        if name not in WRITE_TOOLS:
+            return
+        raw = str(arguments.get("path") or "")
+        if not raw:
+            return
+        workspace = self._tool_context(state).workspace
+        path = Path(raw) if Path(raw).is_absolute() else workspace / raw
+        state.recent_writes.append(str(path))
+        del state.recent_writes[:-20]
 
     def _repeat_verdict(self, call: ToolCall, state: AgentState):
         """How many times this exact call has been made, and what to do."""
@@ -846,7 +877,7 @@ class AgentRuntime:
         )
         self._progress("plan_revised", {"steps": [s.description for s in state.plan]})
 
-    def _finish_from_tool(self, call: ToolCall, state: AgentState) -> AgentResult | None:
+    async def _finish_from_tool(self, call: ToolCall, state: AgentState) -> AgentResult | None:
         """Returns a result to end the task, or None to keep going.
 
         A malformed `finish` must not end the task with a bogus answer --
@@ -879,7 +910,7 @@ class AgentRuntime:
             )
             self._persist(state)
             return self._result(state, duration=0.0)
-        return self._complete(state, answer, time.time())
+        return await self._try_complete(state, answer, time.time())
 
     def _stream_callback(self, task_id: str, message_id: str):
         """Only stream when someone is listening.
@@ -1244,6 +1275,149 @@ class AgentRuntime:
         self._progress("plan_approval", {"steps": steps})
         return self._result(state, duration=time.time() - started)
 
+    # -- verification -----------------------------------------------------
+    async def _try_complete(
+        self, state: AgentState, answer: str, started: float
+    ) -> AgentResult | None:
+        """Complete, unless the project's own check says it does not work.
+
+        This is the only place the runtime argues with the model. Everywhere
+        else the model's output is taken at face value and the *tools* are
+        what get checked; here the claim is "it is done", and there is a
+        command that can settle it.
+
+        Returning None means "not done": the failure is in the log, and the
+        loop continues with it. The alternative -- completing anyway and
+        mentioning the failure in the answer -- is how an agent reports
+        success over a red test suite.
+        """
+        if not self._verify_due(state):
+            return self._complete(state, answer, started)
+
+        passed, detail = await self._run_verify(state)
+        if passed:
+            return self._complete(state, answer, started)
+
+        if state.verify_rounds >= self.settings.agent.verify_max_rounds:
+            # Out of attempts. Completing is the honest end here: the failure
+            # is recorded, the answer will not claim otherwise, and looping
+            # again would only spend the rest of the budget on the same fix.
+            state.append_log(
+                LogEntry(
+                    index=0,
+                    kind="system",
+                    text=(
+                        f"The verification command still fails after "
+                        f"{state.verify_rounds} attempt(s). Stop trying to fix it and "
+                        "report what is failing and what you changed."
+                    ),
+                )
+            )
+            self.store.append(
+                state.task_id,
+                EventType.LOG_APPENDED,
+                {"entry": state.log[-1].model_dump(mode="json")},
+            )
+            self._persist(state)
+            return self._complete(state, answer, started)
+
+        state.append_log(
+            LogEntry(
+                index=0,
+                kind="system",
+                text=(
+                    "The task is not finished: the verification command failed "
+                    f"(round {state.verify_rounds} of "
+                    f"{self.settings.agent.verify_max_rounds}).\n\n{detail}\n\n"
+                    "Fix the cause, then finish again. Do not report success while "
+                    "this fails, and do not disable or edit the check."
+                ),
+            )
+        )
+        self.store.append(
+            state.task_id,
+            EventType.LOG_APPENDED,
+            {"entry": state.log[-1].model_dump(mode="json")},
+        )
+        self._persist(state)
+        return None
+
+    def _verify_due(self, state: AgentState) -> bool:
+        """Whether the project's check should run before this completion.
+
+        Off unless a command is configured. Due only when something was
+        written that has not been checked yet -- a run that only read files
+        has nothing to verify, and a second check over the same tree would
+        just cost the user a test run.
+        """
+        agent = self.settings.agent
+        if not agent.verify_command.strip():
+            return False
+        if state.verify_rounds >= agent.verify_max_rounds:
+            return False
+        if not state.recent_writes:
+            return False
+        match = agent.verify_match.strip()
+        if not match:
+            return True
+        return any(_glob_match(path, match) for path in state.recent_writes)
+
+    async def _run_verify(self, state: AgentState) -> tuple[bool, str]:
+        """Run the configured command and record what happened.
+
+        Executed through the same `run_command` instance the model would use,
+        so the sandbox wrapper, the scrubbed environment and the venv on PATH
+        all apply -- but *not* through the permission engine, because the
+        model did not ask for this and the command is the user's own. See
+        `AgentConfig.verify_command` for why that is the whole argument.
+        """
+        agent = self.settings.agent
+        command = agent.verify_command.strip()
+        tool = self.registry.maybe_get("run_command")
+        ctx = self._tool_context(state)
+
+        self.store.append(
+            state.task_id,
+            EventType.VERIFY_STARTED,
+            {"command": command, "round": state.verify_rounds + 1},
+        )
+        self._progress("verify_started", {"command": command})
+
+        if tool is None:  # pragma: no cover - the tool is registered by default
+            return True, ""
+
+        result = await tool.run(
+            {"command": command, "timeout_s": agent.verify_timeout_s}, ctx
+        )
+        output = (result.output or result.error or "").strip()
+        passed = bool(result.success)
+        meta = result.metadata or {}
+        tail = _tail(output, 4_000)
+
+        self.store.append(
+            state.task_id,
+            EventType.VERIFY_FINISHED,
+            {
+                "command": command,
+                "passed": passed,
+                "exit_code": meta.get("exit_code"),
+                "duration_ms": meta.get("duration_ms"),
+                "output_tail": tail,
+                "round": state.verify_rounds + 1,
+            },
+        )
+        state.verify_rounds += 1
+        if passed:
+            state.recent_writes = []
+        self._persist(state)
+        self._progress(
+            "verify_finished",
+            {"command": command, "passed": passed, "exit_code": meta.get("exit_code")},
+        )
+
+        detail = f"$ {command}\n{tail}" if tail else f"$ {command}\n(no output)"
+        return passed, detail
+
     def _complete(self, state: AgentState, answer: str, started: float) -> AgentResult:
         state.answer = answer
         state.status = TaskStatus.COMPLETED
@@ -1365,6 +1539,36 @@ class AgentRuntime:
                 self.on_progress(kind, payload)
             except Exception:  # noqa: BLE001 - UI must never break a task
                 pass
+
+
+def _glob_match(path: str, pattern: str) -> bool:
+    """Glob match with the one convenience people expect from `**/`.
+
+    `fnmatch` treats `*` as "anything including /", so `src/**/*.py` and
+    `src/*.py` behave the same -- which is fine, and simpler than shipping a
+    second matcher. The one thing worth special-casing is a leading `**/`,
+    which people write meaning "at any depth, including none": without this,
+    `**/*.py` would not match `out.py` at the root and the check would never
+    run for the most common case.
+    """
+    candidate = path.replace(os.sep, "/")
+    glob = pattern.replace(os.sep, "/")
+    if fnmatch.fnmatch(candidate, glob):
+        return True
+    if glob.startswith("**/") and fnmatch.fnmatch(candidate, glob[3:]):
+        return True
+    return False
+
+
+def _tail(text: str, limit: int) -> str:
+    """The end of an output, where a test runner puts the failures.
+
+    Head truncation would keep the banner and drop the assertion -- the one
+    part a model needs to fix anything.
+    """
+    if len(text) <= limit:
+        return text
+    return "… (earlier output trimmed)\n" + text[-limit:]
 
 
 def _normalise_plan(steps: list[Any]) -> list[dict[str, Any]]:

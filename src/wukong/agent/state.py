@@ -215,6 +215,16 @@ class AgentState(BaseModel):
     usage: TokenUsage = Field(default_factory=TokenUsage)
     #: Prompt tokens of the most recent model call -- the current context size.
     last_prompt_tokens: int = 0
+    #: How many times the project's own check has been run for this task.
+    verify_rounds: int = 0
+    #: The most recent verification result, for anything that renders status.
+    last_verify: dict[str, Any] | None = None
+    #: Files written since the last successful check, newest last.
+    #:
+    #: Bounded because it is a question ("did anything I care about change?"),
+    #: not a log -- and an unbounded list folded from events would grow with
+    #: every write of a long run.
+    recent_writes: list[str] = Field(default_factory=list)
     pending_confirmation: PendingConfirmation | None = None
     # A call the user approved (or refused) while the task was paused. Kept
     # separately from `pending_confirmation` so that resume() can execute the
@@ -307,6 +317,26 @@ class AgentState(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+#: Tools whose success means a file on disk changed.
+WRITE_TOOLS = frozenset({"write_file", "apply_patch", "delete_file"})
+
+
+def _write_path(name: str, payload: dict[str, Any]) -> str:
+    """The file a completed write touched, if it touched one.
+
+    Read from the tool result's metadata rather than from the arguments: a
+    `write_file` that was refused for a syntax error did not change anything,
+    and counting it would make the check run for a write that never happened.
+    """
+    if name not in WRITE_TOOLS:
+        return ""
+    if payload.get("success") is False:
+        return ""
+    meta = payload.get("metadata") or {}
+    path = meta.get("path")
+    return str(path) if path else ""
+
+
 def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
     """Fold an event stream back into state.
 
@@ -388,6 +418,27 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             # step budget can be reset indefinitely by resuming in a loop.
             if payload.get("phase") == "step":
                 state.steps_used += 1
+
+        elif kind is EventType.TOOL_COMPLETED:
+            name = str(payload.get("name") or "")
+            path = _write_path(name, payload)
+            if path:
+                state.recent_writes.append(path)
+                del state.recent_writes[:-20]
+
+        elif kind is EventType.VERIFY_FINISHED:
+            state.verify_rounds += 1
+            state.last_verify = {
+                "passed": bool(payload.get("passed")),
+                "command": payload.get("command", ""),
+                "exit_code": payload.get("exit_code"),
+                "round": payload.get("round"),
+            }
+            # Only a *passing* check clears the list. A failing one has not
+            # answered the question yet, and clearing it would let the model
+            # finish after the check it failed.
+            if payload.get("passed"):
+                state.recent_writes = []
 
         elif kind is EventType.CONTEXT_COMPACTED:
             state.compacted_summary = payload.get("summary")
