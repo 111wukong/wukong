@@ -467,3 +467,18 @@ class TestExecutionVectorsAreNotWritable:
         assert engine.decide(
             apply_patch, {"path": ".git/config", "edits": [{"old": "a", "new": "b"}]}
         ).denied
+
+
+class TestConfirmPrefixReasons:
+    """A confirmation the user cannot act on is a confirmation they will
+    learn to click through."""
+
+    def test_the_reason_names_the_setting_that_removes_it(self) -> None:
+        from wukong.config import PermissionConfig
+        from wukong.tools.permissions import CommandGuard
+
+        guard = CommandGuard(PermissionConfig())
+        verdict = guard.check("python3 -m pytest -q")
+        assert verdict.decision.value == "confirm", verdict.reason
+        assert "confirm_prefixes" in verdict.reason, verdict.reason
+        assert "settings" in verdict.reason

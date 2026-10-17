@@ -341,7 +341,9 @@ class CommandGuard:
                     Decision.CONFIRM,
                     f"`{' '.join(parts)}` can run anything, so it always needs a "
                     "per-call confirmation -- a blanket approval of command "
-                    "execution is not a statement about this invocation.",
+                    "execution is not a statement about this invocation. To let "
+                    "it run unattended, remove it from "
+                    "permissions.shell.confirm_prefixes in settings.",
                     sticky=True,
                 )
         return None
