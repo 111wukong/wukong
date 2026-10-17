@@ -107,6 +107,18 @@ class FileWrite(BaseModel):
     base_sha: str | None = None
 
 
+class ApproveIn(BaseModel):
+    """A decision on a pending call.
+
+    `accept_hunks` is the narrow yes: the ids from the changeset's hunks, in
+    the order they were shown. Omitted means "all of it", which is the same
+    request the CLI makes and must keep working unchanged.
+    """
+
+    request_id: str | None = None
+    accept_hunks: list[str] | None = None
+
+
 class AgUiRunInput(BaseModel):
     """Subset of AG-UI's `RunAgentInput` that this runtime actually uses."""
 
@@ -241,6 +253,26 @@ def create_app(
             # Reported so a client can tell whether it must authenticate
             # before attempting a mutating call.
             "token_required": bool(token),
+        }
+
+    @app.get("/api/v1/models")
+    async def list_models() -> dict[str, Any]:
+        """Aliases the console can offer, and which one is the default.
+
+        Read from settings rather than from the registry: the registry builds
+        clients lazily, and listing models must not construct one (which is
+        how a model picker ends up demanding an API key it does not need).
+        """
+        return {
+            "default": svc.settings.default_model,
+            "models": [
+                {
+                    "alias": alias,
+                    "provider": getattr(spec, "provider", ""),
+                    "model": getattr(spec, "model", ""),
+                }
+                for alias, spec in (svc.settings.models or {}).items()
+            ],
         }
 
     @app.get("/api/v1/sandbox")
@@ -402,7 +434,14 @@ def create_app(
         return {"id": sid, **{k: v for k, v in (agent.store.get_session(sid) or {}).items()}}
 
     @app.get("/api/v1/sessions")
-    async def list_sessions(limit: int = 20) -> list[dict[str, Any]]:
+    async def list_sessions(limit: int = 20, stats: bool = True) -> list[dict[str, Any]]:
+        """Sessions, newest activity first.
+
+        `stats=0` is the old shape, kept because a caller that only wants ids
+        should not pay for the aggregate.
+        """
+        if stats:
+            return svc.a.store.list_sessions_with_stats(limit=limit)
         return svc.a.store.list_sessions(limit=limit)
 
     # -- tasks ------------------------------------------------------------
@@ -466,10 +505,73 @@ def create_app(
         ]
 
     @app.post("/api/v1/tasks/{task_id}/approve")
-    async def approve(task_id: str, request_id: str | None = None) -> dict[str, Any]:
+    async def approve(
+        task_id: str,
+        request_id: str | None = None,
+        payload: ApproveIn | None = None,
+    ) -> dict[str, Any]:
+        """Approve the pending call, optionally only some of its hunks.
+
+        The query parameter and the body are both accepted because the CLI and
+        the console are two callers of one endpoint, and neither is more
+        correct than the other. A body wins when both are present -- it is the
+        one that carries the narrower decision.
+        """
         _require_pending(svc, task_id)
-        svc.track(task_id, svc.a.runtime.approve(task_id, request_id=request_id))
-        return {"id": task_id, "status": "running"}
+        accepted = payload.accept_hunks if payload else None
+        pending_request = (payload.request_id if payload else None) or request_id
+        try:
+            # Synchronous up to the resume: an unknown hunk id, or a tool whose
+            # change cannot be sliced, is the caller's mistake and deserves a
+            # 400 rather than a background task that quietly writes everything.
+            running = svc.a.runtime.approve(
+                task_id, request_id=pending_request, accept=accepted
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        svc.track(task_id, running)
+        return {
+            "id": task_id,
+            "status": "running",
+            "accepted_hunks": accepted,
+        }
+
+    @app.get("/api/v1/tasks/{task_id}/review")
+    async def review_pending(task_id: str) -> dict[str, Any]:
+        """The change the pending call would make, as files and hunks.
+
+        Recomputed on demand rather than only read from the event, so a client
+        that opens the review pane long after the prompt still gets line
+        numbers that match the file as it is now. If the file moved under the
+        approval, the identity check refuses the write -- this endpoint is a
+        view, not a promise.
+        """
+        task = svc.a.store.get_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
+        state = replay(svc.a.store.events(task_id), task_id=task_id, session_id=task["session_id"])
+        pending = state.pending_confirmation
+        if pending is None:
+            raise HTTPException(status_code=409, detail=f"任务 {task_id} 没有待处理的审批")
+        found = pending.review
+        if found is None:
+            from wukong.review import changeset as _changeset
+
+            # The task's own workspace, not the process default: a task records
+            # where it was created and `resume` refuses a mismatch, so reading
+            # the same value here is what keeps the paths in this view honest.
+            workspace = (
+                Path(state.workspace) if state.workspace else svc.a.settings.workspace
+            )
+            found = _changeset(pending.tool, pending.arguments, workspace)
+        return {
+            "task_id": task_id,
+            "request_id": pending.request_id,
+            "tool": pending.tool,
+            "effect": pending.effect,
+            "preview": pending.preview,
+            "review": found,
+        }
 
     @app.post("/api/v1/tasks/{task_id}/deny")
     async def deny(task_id: str, note: str = "") -> dict[str, Any]:
@@ -927,6 +1029,15 @@ async def _agui_events(
                 for encoded in encoder.on_event(event):
                     yield encoded
             if encoder.finished:
+                for encoded in encoder.finalize():
+                    yield encoded
+                return
+            if encoder.pending is not None:
+                # The task is paused, and a pause is terminal for this run: the
+                # client resumes by starting a new one. Without this the stream
+                # waits for events that will never arrive and the console shows
+                # a run that is still going, indefinitely.
+                yield agui.run_interrupted([encoder.pending])
                 for encoded in encoder.finalize():
                     yield encoded
                 return

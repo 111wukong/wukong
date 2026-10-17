@@ -43,6 +43,8 @@ from wukong.errors import ConfirmationRequired, ModelError
 from wukong.models.registry import ModelRegistry
 from wukong.observability.bus import EventBus
 from wukong.observability.events import EventType
+from wukong.review import changeset as review_changeset
+from wukong.review import revise as review_revise
 from wukong.tools.base import ToolContext
 from wukong.tools.permissions import PermissionEngine, scrub_env
 from wukong.tools.registry import ToolRegistry
@@ -74,6 +76,17 @@ class AgentResult(BaseModel):
     @property
     def needs_approval(self) -> bool:
         return self.status == TaskStatus.WAITING_CONFIRMATION.value
+
+
+async def _resolved(result: AgentResult) -> AgentResult:
+    """Wrap a finished result as a coroutine.
+
+    `approve` is synchronous up to the point where it resumes the loop, so that
+    a bad hunk id raises at the call site rather than inside a background task.
+    Its callers `await` the return value, so the early-exit path has to hand
+    back something awaitable.
+    """
+    return result
 
 
 #: Statuses where a loop is driving the task, so the cancellation marker will
@@ -365,21 +378,75 @@ class AgentRuntime:
         await self._reflect(state, result)
         return result
 
-    async def approve(self, task_id: str, *, request_id: str | None = None) -> AgentResult:
+    def approve(
+        self,
+        task_id: str,
+        *,
+        request_id: str | None = None,
+        accept: list[str] | None = None,
+    ):
+        """Approve the pending call, optionally narrowed to some hunks.
+
+        `accept=None` is the ordinary "yes, all of it". A list of hunk ids is
+        a narrower yes, and it is applied by rewriting the pending arguments
+        *before* the call runs -- which is why the ledger's write-ahead rule
+        pays off here: there is no partially applied change to undo, only a
+        different string to write.
+
+        The revision is an event, not a local edit. `resume` replays state
+        from events, so a revision held only in memory would vanish on a crash
+        between approval and execution and the replay would then write the
+        hunks the human had rejected.
+
+        Deliberately not `async def`: everything up to the resume is
+        synchronous, so a bad hunk id raises at the call site instead of
+        disappearing into a background task. The return value is the coroutine
+        for the resumed run, which `await` handles exactly as before.
+        """
         state, _ = self._load(task_id)
         pending = state.pending_confirmation
         if pending is None:
-            return self._result(state, duration=0.0)
+            return _resolved(self._result(state, duration=0.0))
         if request_id and request_id != pending.request_id:
             raise ValueError(f"request {request_id!r} is not pending; {pending.request_id!r} is")
+
+        accepted_ids: list[str] | None = None
+        if accept is not None:
+            ctx = self._tool_context(state)
+            revised = review_revise(pending.arguments, accept, ctx.workspace)
+            tool = self.registry.maybe_get(pending.tool)
+            preview = (
+                tool.preview(revised, ctx) if tool else pending.preview
+            )
+            self.store.append(
+                task_id,
+                EventType.CONFIRMATION_REVISED,
+                {
+                    "request_id": pending.request_id,
+                    "tool": pending.tool,
+                    "arguments": revised,
+                    "preview": preview,
+                    "review": review_changeset(pending.tool, revised, ctx.workspace),
+                    "accepted_hunks": list(accept),
+                },
+            )
+            accepted_ids = list(accept)
+
         self.store.append(
             task_id,
             EventType.CONFIRMATION_GRANTED,
-            {"request_id": pending.request_id, "tool": pending.tool, "effect": pending.effect},
+            {
+                "request_id": pending.request_id,
+                "tool": pending.tool,
+                "effect": pending.effect,
+                **({"accepted_hunks": accepted_ids} if accepted_ids is not None else {}),
+            },
         )
-        return await self.resume(task_id)
+        return self.resume(task_id)
 
-    async def deny(self, task_id: str, *, request_id: str | None = None, note: str = "") -> AgentResult:
+    async def deny(
+        self, task_id: str, *, request_id: str | None = None, note: str = ""
+    ) -> AgentResult:
         state, _ = self._load(task_id)
         pending = state.pending_confirmation
         if pending is None:
@@ -1016,6 +1083,10 @@ class AgentRuntime:
         identity = fingerprint(
             need.tool, need.arguments, workspace=ctx.workspace, env=ctx.env
         )
+        # Computed once, here, and carried on the event: the reviewer sees it
+        # in the same breath as the prompt, and a client that attaches late
+        # replays it rather than re-reading files that may have changed since.
+        review = review_changeset(need.tool, need.arguments, ctx.workspace)
         pending = PendingConfirmation(
             request_id=request_id,
             step_id=state.step_id(),
@@ -1025,6 +1096,7 @@ class AgentRuntime:
             reason=str(need),
             preview=preview,
             identity=identity.as_dict() if identity else {},
+            review=review,
         )
         state.pending_confirmation = pending
         state.status = TaskStatus.WAITING_CONFIRMATION
@@ -1040,6 +1112,7 @@ class AgentRuntime:
                 "reason": pending.reason,
                 "preview": preview,
                 "identity": pending.identity,
+                "review": review,
             },
         )
         self._persist(state)

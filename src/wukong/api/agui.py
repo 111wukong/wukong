@@ -208,6 +208,9 @@ class AgUiEncoder:
     _streamed: set[str] = field(default_factory=set)
     _open_steps: set[str] = field(default_factory=set)
     _final: bool = False
+    #: The approval this run is paused on, if any. Kept so a replay can end on
+    #: it instead of waiting for events that will never come.
+    _pending: dict[str, Any] | None = None
 
     def on_delta(self, item: BusItem) -> list[dict[str, Any]]:
         """Ephemeral token delta. Not durable, so it is never replayed."""
@@ -354,6 +357,19 @@ class AgUiEncoder:
 
     def _on_confirmation_requested(self, event: Event) -> list[dict[str, Any]]:
         # Deferred: the interrupt is published as the terminal RUN_FINISHED.
+        # Recorded anyway, because a *replay* has to be able to end the stream
+        # on it -- otherwise attaching to a task that is waiting for approval
+        # replays everything and then hangs, and the client shows a run that is
+        # "still going" for as long as the tab is open.
+        self._pending = interrupt_from_event(event)
+        return []
+
+    def _on_confirmation_granted(self, event: Event) -> list[dict[str, Any]]:
+        self._pending = None
+        return []
+
+    def _on_confirmation_denied(self, event: Event) -> list[dict[str, Any]]:
+        self._pending = None
         return []
 
     def _on_context_compacted(self, event: Event) -> list[dict[str, Any]]:
@@ -392,6 +408,11 @@ class AgUiEncoder:
     def finished(self) -> bool:
         return self._final
 
+    @property
+    def pending(self) -> dict[str, Any] | None:
+        """The approval the replayed stream ended on, or None."""
+        return self._pending
+
 
 def interrupt_for(pending: Any) -> dict[str, Any]:
     """Shape a PendingConfirmation as an AG-UI interrupt.
@@ -406,6 +427,10 @@ def interrupt_for(pending: Any) -> dict[str, Any]:
         "arguments": pending.arguments,
         "preview": pending.preview,
         "detail": pending.reason,
+        # Files and hunks, when the call would change one. A client that only
+        # knows about `preview` keeps working; a client that can render a
+        # changeset does not need a second round trip while the run is paused.
+        "review": getattr(pending, "review", None),
     }
 
 
@@ -430,6 +455,7 @@ def interrupt_from_event(event: Event) -> dict[str, Any]:
         "arguments": payload.get("arguments") or {},
         "preview": payload.get("preview") or "",
         "detail": payload.get("reason") or "",
+        "review": payload.get("review"),
     }
 
 

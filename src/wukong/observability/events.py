@@ -57,6 +57,13 @@ class EventType(str, Enum):
 
     # human in the loop
     CONFIRMATION_REQUESTED = "confirmation_requested"
+    #: The human accepted the call with a narrower scope than it was proposed
+    #: with -- currently "these hunks, not those". Recorded as an event rather
+    #: than kept in memory because `resume` replays state: a revision living
+    #: only in the process would be lost by a crash between approval and
+    #: execution, and the replay would then write everything the human
+    #: rejected.
+    CONFIRMATION_REVISED = "confirmation_revised"
     CONFIRMATION_GRANTED = "confirmation_granted"
     CONFIRMATION_DENIED = "confirmation_denied"
 

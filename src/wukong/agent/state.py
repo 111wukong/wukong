@@ -164,6 +164,10 @@ class PendingConfirmation(BaseModel):
     #: Fingerprint of what this call will act on, taken when the request was
     #: raised and re-checked before it runs. See `execution_identity`.
     identity: dict[str, Any] = Field(default_factory=dict)
+    #: Files, hunks and line numbers for the change this call would make, when
+    #: it makes one. `preview` is the same information as a truncated text
+    #: diff; this is the shape a reviewer can act on. See `wukong.review`.
+    review: dict[str, Any] | None = None
 
 
 class AgentState(BaseModel):
@@ -363,8 +367,24 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
                 reason=payload.get("reason", ""),
                 preview=payload.get("preview", ""),
                 identity=payload.get("identity") or {},
+                review=payload.get("review"),
             )
             state.status = TaskStatus.WAITING_CONFIRMATION
+
+        elif kind is EventType.CONFIRMATION_REVISED:
+            # Narrowing, not re-approving: the call stays pending, with the
+            # arguments the human actually agreed to. Anything that does not
+            # match the pending request is ignored rather than applied, so a
+            # stale revision cannot rewrite a newer prompt.
+            request = state.pending_confirmation
+            if request and request.request_id == payload.get("request_id"):
+                arguments = payload.get("arguments")
+                if isinstance(arguments, dict):
+                    request.arguments = arguments
+                if payload.get("preview"):
+                    request.preview = payload["preview"]
+                if isinstance(payload.get("review"), dict):
+                    request.review = payload["review"]
 
         elif kind is EventType.CONFIRMATION_GRANTED:
             request = state.pending_confirmation

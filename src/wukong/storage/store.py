@@ -160,6 +160,39 @@ class Store:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_sessions_with_stats(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Sessions with what a sidebar needs: when it last moved, how much it
+        cost, and what the newest task is doing.
+
+        Aggregated in one statement rather than one query per session. A
+        sidebar that fires N+1 queries is the classic reason "the list feels
+        slow" -- and it is invisible in a test that only checks the JSON.
+
+        `last_active_at` falls back to `created_at` for a session with no
+        tasks yet, so an empty session sorts by when it was made instead of
+        sorting last.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT s.*,
+                   COALESCE(MAX(t.updated_at), s.created_at) AS last_active_at,
+                   COUNT(t.id)                                AS task_count,
+                   COALESCE(SUM(t.cost_usd), 0)               AS cost_usd,
+                   COALESCE(SUM(t.tokens_in + t.tokens_out), 0) AS tokens,
+                   COALESCE(SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END), 0)
+                                                              AS running_count,
+                   COALESCE(SUM(CASE WHEN t.status = 'waiting_confirmation'
+                                     THEN 1 ELSE 0 END), 0)   AS waiting_count
+              FROM sessions s
+              LEFT JOIN tasks t ON t.session_id = s.id
+             GROUP BY s.id
+             ORDER BY last_active_at DESC, s.created_at DESC
+             LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ------------------------------------------------------------------
     # events  (append-only, gapless per task)
     # ------------------------------------------------------------------

@@ -1263,3 +1263,211 @@ class TestSkillGate:
             response = client.post("/api/v1/skills/jumper/promote", json={"status": "active"})
 
         assert response.status_code == 400
+
+
+class TestHunkLevelApproval:
+    """Approving part of a write.
+
+    A five-hunk rewrite arrived as one Yes/No button, which makes "approve"
+    mean "skim and click". These tests hold the two ends of the contract: the
+    review endpoint describes the change, and approving a subset writes only
+    that subset -- with the rejected hunks absent from the file, not merely
+    un-highlighted.
+    """
+
+    BEFORE = "".join(f"line {i}\n" for i in range(1, 31))
+
+    def _paused_write(self, api, workspace, settings, after: str):  # noqa: ANN001, ANN202
+        # The shared fixture allows writes so the loop can be exercised without
+        # a prompt everywhere else. Here the prompt *is* the subject.
+        from wukong.tools.permissions import Decision
+        from wukong.types import EffectClass
+
+        settings.permissions.defaults[EffectClass.WRITE_LOCAL] = Decision.CONFIRM
+
+        (workspace / "notes.md").write_text(self.BEFORE, encoding="utf-8")
+        client = api(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "write_file",
+                            "arguments": {"path": "notes.md", "content": after},
+                        }
+                    ]
+                }
+            ]
+        )
+        client.__enter__()
+        created = client.post("/api/v1/tasks", json={"goal": "edit notes"}).json()
+        task_id = created.get("task_id") or created.get("id")
+        client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+        detail = client.get(f"/api/v1/tasks/{task_id}").json()
+        assert detail["status"] == "waiting_confirmation", "the test needs a paused task"
+        return client, task_id
+
+    def test_the_review_endpoint_describes_files_and_hunks(
+        self, api, workspace, settings
+    ) -> None:  # noqa: ANN001
+        after = self.BEFORE.replace("line 5\n", "FIVE\n").replace("line 20\n", "TWENTY\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            body = client.get(f"/api/v1/tasks/{task_id}/review").json()
+        finally:
+            client.__exit__(None, None, None)
+
+        assert body["tool"] == "write_file"
+        review = body["review"]
+        assert review["partial"] is True
+        files = review["files"]
+        assert [f["path"] for f in files] == ["notes.md"]
+        assert files[0]["additions"] == 2
+        assert files[0]["deletions"] == 2
+        assert [h["id"] for h in files[0]["hunks"]] == ["h0", "h1"]
+
+    def test_the_interrupt_carries_the_same_review(self, api, workspace, settings) -> None:  # noqa: ANN001
+        after = self.BEFORE.replace("line 5\n", "FIVE\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            events = client.get(f"/api/v1/tasks/{task_id}/events").json()
+        finally:
+            client.__exit__(None, None, None)
+
+        requested = [e for e in events if e["type"] == "confirmation_requested"]
+        assert requested, "no approval was requested"
+        review = requested[-1]["payload"]["review"]
+        assert review["files"][0]["path"] == "notes.md"
+        assert review["files"][0]["hunks"][0]["lines"]
+
+    def test_approving_one_hunk_writes_only_that_hunk(
+        self, api, workspace, settings
+    ) -> None:  # noqa: ANN001
+        after = self.BEFORE.replace("line 5\n", "FIVE\n").replace("line 20\n", "TWENTY\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            review = client.get(f"/api/v1/tasks/{task_id}/review").json()["review"]
+            first = review["files"][0]["hunks"][0]["id"]
+            response = client.post(
+                f"/api/v1/tasks/{task_id}/approve", json={"accept_hunks": [first]}
+            )
+            assert response.status_code == 200, response.text
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            events = client.get(f"/api/v1/tasks/{task_id}/events").json()
+        finally:
+            client.__exit__(None, None, None)
+
+        written = (workspace / "notes.md").read_text(encoding="utf-8")
+        assert "FIVE" in written
+        assert "TWENTY" not in written
+        assert "line 20" in written
+        # The narrowing is a fact in the log, not a transient decision.
+        assert any(e["type"] == "confirmation_revised" for e in events)
+        granted = [e for e in events if e["type"] == "confirmation_granted"][-1]
+        assert granted["payload"]["accepted_hunks"] == [first]
+
+    def test_approving_everything_still_writes_everything(
+        self, api, workspace, settings
+    ) -> None:  # noqa: ANN001
+        """The old behaviour has to survive: no body, no narrowing."""
+        after = self.BEFORE.replace("line 5\n", "FIVE\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            response = client.post(f"/api/v1/tasks/{task_id}/approve")
+            assert response.status_code == 200, response.text
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+        finally:
+            client.__exit__(None, None, None)
+
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == after
+
+    def test_an_unknown_hunk_id_is_refused_rather_than_ignored(
+        self, api, workspace, settings
+    ) -> None:  # noqa: ANN001
+        """Silently writing everything after being told "just this hunk" is
+        the worst possible failure mode for an approval gate."""
+        after = self.BEFORE.replace("line 5\n", "FIVE\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            response = client.post(
+                f"/api/v1/tasks/{task_id}/approve", json={"accept_hunks": ["h99"]}
+            )
+            still_pending = client.get(f"/api/v1/tasks/{task_id}").json()
+        finally:
+            client.__exit__(None, None, None)
+
+        # An id that is not in the diff is a client bug. Answering 200 would
+        # mean the write happened while the UI said "one hunk".
+        assert response.status_code == 400, response.text
+        assert still_pending["status"] == "waiting_confirmation"
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == self.BEFORE
+
+    def test_attaching_to_a_paused_task_ends_on_the_interrupt(self, api, workspace, settings) -> None:  # noqa: ANN001
+        """Replaying a paused task must terminate.
+
+        It used to replay the events and then wait for more, because the
+        interrupt is only published on the live path. A client attaching to a
+        task that was waiting for approval therefore hung until the idle
+        timeout, showing a run that was "still going" -- which is the one thing
+        a paused run is not.
+        """
+        after = self.BEFORE.replace("line 5\n", "FIVE\n")
+        client, task_id = self._paused_write(api, workspace, settings, after)
+        try:
+            response = client.get(f"/api/v1/tasks/{task_id}/stream")
+            events = parse_sse(response.text)
+        finally:
+            client.__exit__(None, None, None)
+
+        assert "RUN_FINISHED" in types_of(events)
+        finished = [e for e in events if e["type"] == "RUN_FINISHED"][-1]
+        assert finished["outcome"]["type"] == "interrupt"
+        assert finished["outcome"]["interrupts"][0]["tool"] == "write_file"
+
+    def test_a_command_has_no_review(self, api, workspace) -> None:  # noqa: ANN001
+        client = api([{"tool_calls": [{"name": "run_command", "arguments": {"command": "ls"}}]}])
+        with client:
+            created = client.post("/api/v1/tasks", json={"goal": "list"}).json()
+            task_id = created.get("task_id") or created.get("id")
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            body = client.get(f"/api/v1/tasks/{task_id}/review").json()
+
+        assert body["review"] is None
+
+
+class TestSessionHistory:
+    """What the sidebar needs to show a past session without opening it.
+
+    The console used to list tasks only, so a reload left the previous run
+    reachable by id and by nothing else. Grouping by session needs the
+    aggregate fields, and needs them from one query -- a sidebar that fires a
+    request per session is the reason a list "feels slow".
+    """
+
+    def test_a_session_reports_its_task_count_and_last_activity(self, api) -> None:  # noqa: ANN001
+        with api([{"content": "one"}, {"content": "two"}]) as client:
+            created = client.post("/api/v1/sessions", json={"name": "工作"}).json()
+            session_id = created["id"]
+            for goal in ("第一件事", "第二件事"):
+                client.post("/api/v1/tasks", json={"goal": goal, "session_id": session_id})
+            sessions = client.get("/api/v1/sessions").json()
+
+        found = next(s for s in sessions if s["id"] == session_id)
+        assert found["task_count"] == 2
+        assert found["last_active_at"]
+        assert found["cost_usd"] is not None
+        assert found["name"] == "工作"
+
+    def test_stats_can_be_skipped(self, api) -> None:  # noqa: ANN001
+        with api([]) as client:
+            plain = client.get("/api/v1/sessions?stats=0").json()
+        assert plain == [] or "task_count" not in plain[0]
+
+    def test_tasks_can_be_scoped_to_one_session(self, api) -> None:  # noqa: ANN001
+        with api([{"content": "ok"}]) as client:
+            first = client.post("/api/v1/sessions", json={"name": "a"}).json()["id"]
+            second = client.post("/api/v1/sessions", json={"name": "b"}).json()["id"]
+            client.post("/api/v1/tasks", json={"goal": "in a", "session_id": first})
+            client.post("/api/v1/tasks", json={"goal": "in b", "session_id": second})
+            scoped = client.get(f"/api/v1/tasks?session_id={first}").json()
+
+        assert [t["goal"] for t in scoped] == ["in a"]
