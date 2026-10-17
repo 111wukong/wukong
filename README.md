@@ -5,28 +5,96 @@
 [![tests](https://img.shields.io/badge/tests-967%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-一个本地优先的通用 AI Agent 运行时。Python 3.11+，SQLite，无外部服务依赖。
+**本地优先的 AI Agent 运行时。它只有一条核心主张：不在没有证据的情况下说「做完了」。**
+
+Python 3.11+ · SQLite · 零外部服务 · 全部 967 条测试离线可跑
+
+<img src="docs/images/console-approval.png" width="100%" alt="逐块审查：取消勾选的改动不会被写入">
+
+「Agent 说它改好了」和「它真的改好了」之间隔着三件事：**改动没被看过、方向没人确认过、代码没人跑过**。大多数 agent 用更长的总结来填这条缝。这个项目用三个闸门填。
+
+---
+
+## 三件别的 agent 没做的事
+
+### 一、写之前，逐块审查
+
+审批不是「一段 diff 加一个批准按钮」——那是把「扫一眼然后点」伪装成审查。服务端把待写入的内容算成 changeset：文件 → hunk → 带双行列号的行，每个 hunk 一个复选框。
+
+**取消勾选的 hunk 不会被写入。** 不是撤销，是从未存在过 —— 因为台账是写前的，待批准的内容还只是一个字符串，「只接受这一块」就是换一个字符串，没有半写状态需要回滚。
+
+Cursor 的 checkpoint 做不到这一点：它只能先写再回滚，而且官方明确写着它回滚文件、不回滚对话。Claude Code 的 rewind 也不覆盖 Bash 改过的文件。
 
 ```bash
-wukong init
-wukong run --model mock "查看当前目录下的 Python 文件并总结"   # 离线，不需要任何 API key
-wukong run "分析认证模块并补充测试"                            # 用真实模型
-wukong run --multi-agent "对比这五个模块的设计取舍"            # 显式开启子 Agent 扇出
-wukong serve                                                   # HTTP + WebSocket + Web 控制台
-wukong a2a card                                                # 会发布的 Agent Card
-wukong a2a call https://partner.example.com "summarise this"    # 调另一个 Agent（默认不允许）
-wukong desktop                                                 # 原生桌面窗口
-wukong desktop --bundle                                        # 打成可双击的 .app
-wukong sandbox                                                 # 报告进程隔离实际是否生效
-wukong skill list                                              # 技能，含等待人工审核的候选
-wukong task rewind <task_id>                                   # 预览：还原这个任务改过的文件
+curl http://127.0.0.1:8000/api/v1/tasks/<id>/review          # 待批准改动的结构
+curl -X POST http://127.0.0.1:8000/api/v1/tasks/<id>/approve \
+     -d '{"accept_hunks": ["h0"]}' -H 'Content-Type: application/json'
+```
+
+只接受 `h0` 时，落盘的是「原文件 + h0」，`h1` 的改动不在文件里。这条收窄是一次 `confirmation_revised` 事件，然后才是 `confirmation_granted` —— 不是内存里的一次修改，因为 `resume` 从事件重放状态，只活在进程里的修订会在崩溃后消失。
+
+### 二、计划先批，再花钱
+
+打开「先给计划」，规划一完成就停下来。步骤可以删、可以改写：
+
+<img src="docs/images/console-plan.png" width="100%">
+
+**你改过的那份计划才是契约**（`plan_approved` 事件里存的就是它）。这是整个系统里唯一能在花钱之前省钱的闸门 —— 工具审批和预算都是在钱花掉之后才说话，而最贵的错误从来不是「跑错了」，是「正确地跑错了方向」。
+
+拒绝（「让 Agent 重做」）会清空计划让循环重新规划，并把你的备注原样写进日志。它**不计入拒绝次数**：「换个计划」不是「你不许做这个」，计入的话两次改主意就会把任务自动停掉。
+
+### 三、完成之前，先跑一遍
+
+```bash
+wukong config set agent.verify_command "pytest -q"
+```
+
+模型说要完成时，如果这次运行写过文件而还没验证过，先跑这条命令。**失败就不算完成**：输出尾部作为一条 system 记录回灌，循环继续，模型自己修。
+
+<img src="docs/images/console-verify.png" width="100%">
+
+连续失败到上限（默认 2 次）才允许结束，但会记「仍然失败」，顶栏挂红色「验证未通过」——「已完成」不会掩盖红着的测试。
+
+这条命令来自**用户自己的设置**，不是工作区、不是模型，所以它继承你 shell profile 的信任级别，一个仓库不能靠被 clone 就把命令塞进你的运行里。它走和 `run_command` 同一个实例（同一套沙箱、清洗过的环境、venv PATH），但**不经过权限引擎**：模型没有发起它。
+
+事件是 `verify_started` / `verify_finished`；AG-UI 上是一个真正的 `STEP_STARTED("verify")` 加 `CUSTOM verify_result`，所以时间线上它和它检查的那些工具调用挨在一起。
+
+---
+
+## 60 秒跑起来
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/wukong init
+.venv/bin/wukong demo            # 离线端到端演示，不需要任何 API key
+.venv/bin/wukong serve           # 控制台 http://127.0.0.1:8000/
+```
+
+接一个真实模型（任意 OpenAI 兼容端点：OpenAI / DeepSeek / 通义千问 / Ollama / LM Studio / vLLM）：
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+.venv/bin/wukong config set default_model deepseek
+.venv/bin/wukong run "找出所有 TODO 并分类"
+```
+
+命令行里还有：
+
+```bash
+wukong run --plan "重构认证模块"              # 先出计划，等批准
+wukong run --multi-agent "对比这五个模块"     # 显式开启子 Agent 扇出
+wukong task rewind <task_id>                 # 预览：还原这个任务改过的文件
+wukong task rewind <task_id> --apply         # 真的还原
+wukong a2a card                              # 会发布的 Agent Card
+wukong desktop                               # 原生窗口（系统 webview，不是 Electron）
+wukong sandbox                               # 报告进程隔离实际是否生效
 ```
 
 ---
 
 ## 它是什么，不是什么
 
-**是**：一个有状态的 Agent 运行时。任务可中断、可恢复、可审计，工具权限可强制，上下文有预算，技能可沉淀。
+**是**：一个有状态的 Agent 运行时。任务可中断、可恢复、可审计，工具权限可强制，上下文有预算，技能可沉淀，改动可逐块审查，完成可被验证。
 
 **不是**：又一个「把 LangGraph / CrewAI / AutoGen 的优点缝在一起」的框架。那种项目通常的结局是同时继承四家的缺点，还多一层自己的 bug。
 
@@ -36,9 +104,9 @@ CrewAI 的强项是角色化的人体工学，LangGraph 的强项是有类型的
 
 > 选一个真正可靠的执行内核，然后把其余范式做成内核之上的**薄层**。
 
-这个项目选的内核是**事件溯源的有限状态机**。角色 = 配置预设，图 = 声明式工作流文件，对话 = 多 Agent 层的一种策略 —— 都还没有实现，但都只需要加层，不需要改内核。
+这个项目选的内核是**事件溯源的有限状态机**。角色 = 配置预设，图 = 声明式工作流文件，对话 = 多 Agent 层的一种策略。
 
-而真正的护城河是**三家都没做好**的三件事：
+和**编排框架**比，真正的差别在这四件事上：
 
 | | LangGraph | CrewAI | AutoGen | 本项目 |
 |---|---|---|---|---|
@@ -47,25 +115,19 @@ CrewAI 的强项是角色化的人体工学，LangGraph 的强项是有类型的
 | 每步都调一次 LLM 做反思 | — | — | 是（token 成本 5–6×） | **只调一次，且只在任务结束时** |
 | 技能能否自升级 | — | — | — | **状态机强制人工闸门** |
 
----
+和**编程 agent** 比，包括我们还不如它们的地方：
 
-## 快速开始
+| | Cursor | Cline | Aider | Claude Code | wukong |
+|---|---|---|---|---|---|
+| 写前逐块拒绝 | 否（事后 checkpoint） | 否（整个 checkpoint） | 否 | 否（事后 rewind，且不覆盖 Bash 改动） | **是** |
+| 计划可编辑成契约 | 否 | 部分（Plan/Act 是模式，不是可编辑产物） | 否 | 否 | **是** |
+| 完成前强制验证 | 否 | 否 | **是**（`--auto-test`，每次编辑后） | 钩子可做，非内置 | **是** |
+| 崩溃后恢复在途调用 | — | — | — | 部分 | **写前台账** |
+| 本地零服务依赖 | 否 | 否（VS Code 扩展） | 是 | 是 | 是 |
+| 编辑器内联 diff | **是** | **是** | 否 | 部分 | **否，这是短板** |
+| 图片输入 | **是** | **是** | 否 | **是** | 否 |
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/wukong init
-.venv/bin/wukong doctor          # 检查环境、密钥、权限策略
-.venv/bin/wukong tools           # 列出工具及其权限等级
-.venv/bin/wukong demo            # 离线端到端演示
-```
-
-配置模型（任意 OpenAI 兼容端点：OpenAI / DeepSeek / 通义千问 / Ollama / LM Studio / vLLM）：
-
-```bash
-export DEEPSEEK_API_KEY=sk-...
-.venv/bin/wukong config set default_model deepseek
-.venv/bin/wukong run "找出所有 TODO 并分类"
-```
+Aider 的验证比我们更细（每次编辑后都跑），Cursor / Cline 的内联 diff 比我们的侧栏审查更顺手。这个项目的赌注不在编辑器里，而在**运行时**：当 agent 跑在别人的机器上、跑在 CI 里、跑在你关掉窗口之后，前三个闸门才是唯一能兜住它的东西。
 
 ---
 
@@ -337,60 +399,27 @@ curl -N -X POST http://127.0.0.1:8000/agui \
 
 ## 控制台：能力必须看得见
 
-内核比界面领先一代，是这个项目此前最大的浪费 —— 写前台账、六档权限、上下文预算、技能闸门，在命令行里都有，在浏览器里只剩「一个审批框加两个按钮」。
+控制台是**零构建的 ES 模块**（`app.js` + `js/*.js`：没有 npm，没有打包器，没有构建步骤），消费 AG-UI 事件流 —— 所以它随时可以被 CopilotKit 的 React 组件替换掉，后端一行不改。
 
-现在的控制台是**零构建的 ES 模块**（`app.js` + `js/*.js`，没有 npm，没有打包器），它补的不是配色，是四件让人敢用的事：
+除了上面三个闸门，它只回答一个问题：**长任务里，它现在到底在干什么。**
 
-**1. 改动逐块审查，而不是整次批准。** 审批拿到的是 `changeset`（文件 → hunk → 带双行列号的行），每个 hunk 一个复选框。取消勾选的 hunk **不会被写入** —— 服务端用「原文件 + 被接受的 hunk」重建内容再写，所以被拒绝的部分不是被撤销，而是从未存在过。这是写前台账带来的结构性优势，Cursor 的 checkpoint 做不到（它只能先写再回滚）。
+<img src="docs/images/console-timeline.png" width="100%">
 
-```bash
-curl http://127.0.0.1:8000/api/v1/tasks/<id>/review          # 待批准改动的结构
-curl -X POST http://127.0.0.1:8000/api/v1/tasks/<id>/approve \
-  -H 'Content-Type: application/json' -d '{"accept_hunks": ["h0"]}'
-```
+**「现在在做什么」是一等公民。** 接了 `STEP_STARTED/FINISHED`，工具行显示耗时，顶部常驻一条 `第 3/7 步 · 12s`。日志只能回答「过去发生了什么」，而长任务里让人焦虑的是「它是不是卡住了」。
 
-只接受 `h0` 时，写入的是 `before + h0`，`h1` 的改动不在文件里。逐块接受是一次 `CONFIRMATION_REVISED` 事件，然后才是 `CONFIRMATION_GRANTED` —— **不是内存里的一次修改**：`resume` 从事件重放状态，只存在进程里的修订会在崩溃后消失，重放时把人类拒绝的 hunk 全部写进去。
+**会话是一级对象。** 侧栏是「会话 → 任务」两级，按今天/昨天/本周分组，一次请求带聚合（任务数、成本、有没有待批准），不是 N+1。刷新页面会回到刚才那个任务 —— 包括停在审批上的那个。
 
-**2. 「现在在做什么」是一等公民。** 接了 `STEP_STARTED/FINISHED`，工具行显示耗时，顶部常驻一条 `第 3/7 步 · 12s`。日志只能回答「过去发生了什么」，长任务里真正让人焦虑的是「它是不是卡住了」。
+**证据按类型渲染。** diff 上色带双行号、命令是终端、读文件是文件；工具行里的文件路径点一下直接打开预览。语法高亮是自己写的 80 行，不引依赖 —— 一个需要 npm 的控制台就不叫零构建了。
 
-**3. 会话是一级对象。** 侧栏是「会话 → 任务」两级，按今天/昨天/本周分组，一次请求带聚合（任务数、成本、是否有待批准），不是 N+1。刷新页面会回到刚才那个任务 —— 包括停在审批上的那个。
+**键盘优先。** `⌘K` 命令面板（含「还原这次任务改过的文件」）、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
 
-**4. 计划可以先批再跑。** 打开「先给计划」后，规划完成就停下来：步骤可以删、可以改写，批准后**你改过的那份计划才是契约**（`PLAN_APPROVED` 事件里存的就是它）。这是整个系统里唯一能在花钱之前省钱的闸门 —— 工具审批和预算都是在钱花掉之后才说话。
-
-**5. 键盘优先。** `⌘K` 命令面板（含「还原这次任务改过的文件」）、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
-
-状态栏还常驻**上下文占比**（最近一次 prompt 的 token / 窗口大小）。它和「花了多少 token」是两个问题：一次跑动可能累计花了 40 万 token，而当前 prompt 只占 2 万 —— 前者回答不了「下一步还塞不塞得下」。
+状态栏常驻**上下文占比**（最近一次 prompt 的 token / 窗口大小）。它和「花了多少 token」是两个问题：一次运行可能累计花了 40 万 token，而当前 prompt 只占 2 万 —— 前者回答不了「下一步还塞不塞得下」。
 
 流式渲染是 O(n)：Markdown 按**空行边界**把已闭合的块解析一次并追加，只有尾部重解析。每收到一个 delta 就全量 `replaceChildren(renderMarkdown(全文))` 是 O(n²)，两千字左右开始掉帧 —— 这不是审美问题，是算术问题。
 
 ```bash
 wukong serve          # http://127.0.0.1:8000/
 ```
-
----
-
-## 验证：完成之前先跑一遍
-
-「改完了」是这个系统里最容易撒的谎。模型改完文件，没有任何东西执行过它，然后它报告成功 —— 而工具调用全部成功、权限全部合规、预算还有富余。
-
-所以配一条命令：
-
-```bash
-wukong config set agent.verify_command "pytest -q"
-wukong config set agent.verify_match "src/**/*.py"   # 可选，只有改到这些文件才验证
-```
-
-规则只有一条：**模型说要完成时，如果这次运行写过文件而还没验证过，先跑这条命令**。
-
-- 通过 → 正常完成。
-- 失败 → **不完成**。输出尾部（测试框架把失败放在末尾，截头会丢掉断言）作为一条 `system` 记录进入上下文，循环继续，模型自己修。
-- 连续失败达到 `verify_max_rounds`（默认 2）→ 允许结束，但记录「仍然失败」并告诉模型停止尝试、如实报告。顶栏会挂一个红色的「验证未通过」，所以「已完成」不会掩盖红着的测试。
-
-**它为什么不需要审批。** 这条命令来自**用户自己的设置**，不是工作区，也不是模型 —— 它继承的是用户 shell profile 的信任级别，一个仓库不能靠被 clone 就把命令塞进你的运行里。它走的是 `run_command` 同一个实例（同一套沙箱、同一套清洗过的环境、同一个 venv PATH），但**不经过权限引擎**：模型没有发起它。反过来做——把它塞进模型的 `execute_local` 额度——意味着用户在自己配置里写了一条命令，却还要额外把 shell 权限交给模型才能用。
-
-这也是为什么它只有一条命令、没有 shell：`pytest -q && rm -rf x` 会被 `shlex.split` 拆成 pytest 的参数，不会执行。想跑组合命令，写一个脚本，把脚本路径配进来。
-
-事件是 `verify_started` / `verify_finished`，AG-UI 上是一个真正的 `STEP_STARTED("verify")` 加 `CUSTOM verify_result`，所以时间线上它和它检查的那些工具调用挨在一起。
 
 ---
 
