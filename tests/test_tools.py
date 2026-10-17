@@ -574,3 +574,46 @@ class TestRunTestsPicksAnInterpreter:
         result = await RunTestsTool().run({}, ctx)
         assert result.success, (result.error or result.output)[:300]
         assert "1 passed" in result.output
+
+
+class TestApprovalPreviews:
+    """What the human reads when deciding whether to let a call run.
+
+    The default preview dumps the arguments as JSON, which for `run_command`
+    means `run_command({"command": "python3 -m pytest -q", "cwd": "/long/..."})`
+    -- a brace-delimited blob with an absolute path in the middle of it. Seen
+    in a real DeepSeek run, where every test-run approval arrived that way.
+    """
+
+    def test_a_command_previews_as_a_shell_line(self) -> None:
+        from wukong.tools.shell import RunCommandTool
+
+        assert RunCommandTool().preview({"command": "pytest -q"}) == "$ pytest -q"
+
+    def test_cwd_and_timeout_are_second_class(self) -> None:
+        from wukong.tools.shell import RunCommandTool
+
+        out = RunCommandTool().preview({"command": "ls", "cwd": "/tmp/x", "timeout_s": 30})
+        assert out.splitlines()[0] == "$ ls", "the command is the first line"
+        assert "(cwd /tmp/x)" in out
+        assert "(timeout 30s)" in out
+
+    def test_no_cwd_no_second_line(self) -> None:
+        from wukong.tools.shell import RunCommandTool
+
+        assert RunCommandTool().preview({"command": "ls"}) == "$ ls"
+
+    def test_run_tests_previews_what_it_resolved(self, workspace) -> None:  # noqa: ANN001
+        """`run_tests({})` says nothing; the resolution says everything."""
+        from wukong.tools.shell import RunTestsTool
+
+        out = RunTestsTool().preview({}, None)
+        assert out.startswith("$ "), out
+        assert "pytest" in out
+        assert out.count("\n") == 1, "command, then cwd"
+
+    def test_a_target_is_part_of_the_command(self, workspace) -> None:  # noqa: ANN001
+        from wukong.tools.shell import RunTestsTool
+
+        out = RunTestsTool().preview({"target": "tests/test_x.py::test_y"}, None)
+        assert "tests/test_x.py::test_y" in out.splitlines()[0]

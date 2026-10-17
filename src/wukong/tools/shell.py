@@ -161,6 +161,24 @@ class RunCommandTool(Tool):
         self.sandbox_mode = sandbox_mode
         self.max_output_bytes = max_output_bytes
 
+    def preview(self, args: dict[str, Any], ctx: ToolContext | None = None) -> str:
+        """The command as a shell line, not as a JSON dump.
+
+        The default preview renders `run_command({"command": ..., "cwd":
+        ...})`, and an approval prompt is read by a human deciding whether to
+        let this run -- who is looking for the command, not for its JSON
+        encoding. Seen in a real DeepSeek run: every `python3 -m pytest`
+        approval arrived as a brace-delimited blob with the absolute cwd in
+        the middle of it.
+        """
+        command = str(args.get("command") or "")
+        lines = [f"$ {command}"]
+        if args.get("cwd"):
+            lines.append(f"(cwd {args['cwd']})")
+        if args.get("timeout_s"):
+            lines.append(f"(timeout {float(args['timeout_s']):.0f}s)")
+        return "\n".join(lines)
+
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = args["command"]
         try:
@@ -316,6 +334,20 @@ class RunTestsTool(Tool):
             return ["go", "test", "./..."]
         return [*pytest_cmd, "-q", "--no-header"]
 
+    def preview(self, args: dict[str, Any], ctx: ToolContext | None = None) -> str:
+        """The command it resolved to, not the arguments it was given.
+
+        `run_tests({})` says nothing; what the human is approving is the
+        interpreter and the test path the tool picked. Showing the resolution
+        is also what makes a wrong pick visible *before* it runs.
+        """
+        base = ctx.workspace if ctx else Path(".")
+        cwd = Path(args["cwd"]) if args.get("cwd") else base
+        if not cwd.is_absolute():
+            cwd = base / cwd
+        argv = [*self.detect(cwd), *([args["target"]] if args.get("target") else [])]
+        return "\n".join([f"$ {' '.join(argv)}", f"(cwd {cwd})"])
+
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         cwd = Path(args["cwd"]) if args.get("cwd") else ctx.workspace
         if not cwd.is_absolute():
@@ -384,6 +416,20 @@ class RunLinterTool(Tool):
         if (workspace / "go.mod").exists():
             return ["go", "vet", "./..."]
         return ["ruff", "check", "."]
+
+    def preview(self, args: dict[str, Any], ctx: ToolContext | None = None) -> str:
+        """The command it resolved to, not the arguments it was given.
+
+        `run_tests({})` says nothing; what the human is approving is the
+        interpreter and the test path the tool picked. Showing the resolution
+        is also what makes a wrong pick visible *before* it runs.
+        """
+        base = ctx.workspace if ctx else Path(".")
+        cwd = Path(args["cwd"]) if args.get("cwd") else base
+        if not cwd.is_absolute():
+            cwd = base / cwd
+        argv = [*self.detect(cwd), *([args["target"]] if args.get("target") else [])]
+        return "\n".join([f"$ {' '.join(argv)}", f"(cwd {cwd})"])
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         cwd = Path(args["cwd"]) if args.get("cwd") else ctx.workspace
