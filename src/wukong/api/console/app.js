@@ -13,6 +13,8 @@ import * as sidebar from "./js/sidebar.js";
 import * as transcript from "./js/transcript.js";
 import * as review from "./js/review.js";
 import * as preview from "./js/preview.js";
+import * as plan from "./js/plan.js";
+import * as rewind from "./js/rewind.js";
 import * as palette from "./js/palette.js";
 import { money, tokens } from "./js/format.js";
 
@@ -29,6 +31,7 @@ const GRANTABLE = [
 
 const THREAD_KEY = "wukong.thread";
 const DENSITY_KEY = "wukong.density";
+const PLAN_KEY = "wukong.plan";
 
 /* --------------------------------------------------------------- composer */
 
@@ -79,6 +82,7 @@ async function send(goal) {
         messages: [{ role: "user", content: goal }],
         model: currentModel() || undefined,
         approve: approvedEffects(),
+        plan_approval: planWanted(),
       }),
     });
     if (!response.ok) throw new Error(`${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -146,6 +150,7 @@ async function openTask(taskId) {
   pendingInterrupt = null;
   hideApproval();
   review.closeReview();
+  plan.clear();
   transcript.clearTranscript();
   sidebar.markActive(taskId);
 
@@ -217,6 +222,17 @@ async function cancel() {
 function handleApproval(interrupt) {
   if (!interrupt) return;
   pendingInterrupt = interrupt;
+
+  if (interrupt.kind === "plan") {
+    hideApproval();
+    review.closeReview();
+    plan.renderPlanApproval(interrupt);
+    transcript.setStatus("waiting_confirmation", false);
+    $("empty")?.classList.add("hidden");
+    palette.setContext({ pending: true, reviewable: false });
+    return;
+  }
+
   const reviewable = Boolean(interrupt.review?.files?.length);
   palette.setContext({ pending: true, reviewable });
 
@@ -315,25 +331,40 @@ function updateStatusline(task = null) {
   if (!bar) return;
   const parts = [];
   const model = currentModel();
-  if (model) parts.push(`模型 ${model}`);
-  if (state.taskId) parts.push(`任务 ${state.taskId.slice(-6)}`);
+  if (model) parts.push({ text: `模型 ${model}` });
+  if (state.taskId) parts.push({ text: `任务 ${state.taskId.slice(-6)}` });
   if (task) {
-    parts.push(`${task.steps || 0} 步`);
-    parts.push(`${tokens(task.tokens || 0)} token`);
-    if (task.cost_usd) parts.push(money(task.cost_usd));
+    parts.push({ text: `${task.steps || 0} 步` });
+    parts.push({ text: `${tokens(task.tokens || 0)} token` });
+    if (task.cost_usd) parts.push({ text: money(task.cost_usd) });
+    // How full the window is, as a percentage. "How much have I spent" is a
+    // different number, and it is the one that cannot tell you whether the
+    // next step will fit.
+    if (task.context?.limit) {
+      const ratio = Number(task.context.ratio) || 0;
+      // "<1%" rather than "0%": a window that is a fifth of a percent full
+      // and one that is empty are the same number at zero decimal places, and
+      // "0%" reads as "not measured".
+      const pct = ratio > 0 && ratio < 0.01 ? "<1%" : `${Math.round(ratio * 100)}%`;
+      parts.push({
+        text: `上下文 ${pct}`,
+        tone: ratio >= 0.9 ? "danger" : ratio >= 0.7 ? "warn" : "",
+        title: `${task.context.used} / ${task.context.limit} token`,
+      });
+    }
   } else if (lastUsage.tokens) {
-    parts.push(`${tokens(lastUsage.tokens)} token`);
+    parts.push({ text: `${tokens(lastUsage.tokens)} token` });
   }
+
   bar.replaceChildren();
   parts.forEach((part, index) => {
     if (index) bar.append(el("span", "sep", "·"));
-    bar.append(el("span", "", part));
+    const node = el("span", part.tone || "", part.text);
+    if (part.title) node.title = part.title;
+    bar.append(node);
   });
-  const spacer = el("span", "spacer");
-  bar.append(spacer);
-  if (state.taskId) {
-    bar.append(el("span", "", `${(state.threadId || "").slice(0, 18)}`));
-  }
+  bar.append(el("span", "spacer"));
+  if (state.taskId) bar.append(el("span", "", state.threadId.slice(0, 18)));
 }
 
 async function pollStatus() {
@@ -343,6 +374,7 @@ async function pollStatus() {
     setConn(health.running_tasks > 0 ? "busy" : "ok");
     if (state.taskId) {
       const task = await json(`/api/v1/tasks/${state.taskId}`);
+      palette.setContext({ hasTask: true, hasTranscript: true });
       renderBudget(task);
       updateStatusline(task);
       if (task.pending_confirmation && !pendingInterrupt) {
@@ -430,6 +462,12 @@ function buildApprovalToggles() {
     };
     box.append(button);
   }
+}
+
+/* Whether this run should pause after planning. Read at send time rather than
+ * cached in state, so the switch and the request cannot disagree. */
+function planWanted() {
+  return $("chip-plan")?.getAttribute("aria-pressed") === "true";
 }
 
 function approvedEffects() {
@@ -685,6 +723,7 @@ const ACTIONS = {
       .then(() => openTask(state.taskId))
       .catch((error) => toast({ text: `继续失败：${error.message || error}`, tone: "err" }));
   },
+  rewind: () => rewind.openRewind(state.taskId),
   export: () => exportMarkdown(),
   "copy-last": () => {
     const bodies = $("transcript").querySelectorAll(".turn.assistant .body");
@@ -718,6 +757,7 @@ function newTask() {
   pendingInterrupt = null;
   hideApproval();
   review.closeReview();
+  plan.clear();
   preview.closePreview();
   transcript.clearTranscript();
   sidebar.markActive(null);
@@ -849,6 +889,11 @@ function bindEvents() {
     $("approval-expand").textContent = expanded ? "收起" : "展开";
   };
 
+  $("chip-plan").onclick = () => {
+    const on = $("chip-plan").getAttribute("aria-pressed") === "true";
+    $("chip-plan").setAttribute("aria-pressed", on ? "false" : "true");
+    localStorage.setItem(PLAN_KEY, on ? "0" : "1");
+  };
   $("chip-perms").onclick = (event) => {
     event.stopPropagation();
     togglePop($("perms-pop"), $("chip-perms"));
@@ -924,6 +969,15 @@ function bindEvents() {
     transcript.setStatus("running", true);
     openTask(taskId).catch((error) => console.warn(error));
   });
+  on("scroll", () => transcript.scrollToBottom());
+  on("files-changed", () => {
+    // The tree caches what it read; after a rewind that cache is wrong.
+    if ($("files-fold").open) sidebar.loadTree().catch(() => {});
+  });
+  on("plan-decided", () => {
+    pendingInterrupt = null;
+    palette.setContext({ pending: false, reviewable: false });
+  });
   on("review-decided", () => {
     pendingInterrupt = null;
     palette.setContext({ pending: false, reviewable: false });
@@ -951,6 +1005,10 @@ function bindEvents() {
 async function boot() {
   const savedDensity = localStorage.getItem(DENSITY_KEY);
   if (savedDensity) document.documentElement.dataset.density = savedDensity;
+
+  if (localStorage.getItem(PLAN_KEY) === "1") {
+    $("chip-plan").setAttribute("aria-pressed", "true");
+  }
 
   const savedThread = localStorage.getItem(THREAD_KEY);
   if (savedThread) state.threadId = savedThread;

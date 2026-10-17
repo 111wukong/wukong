@@ -81,6 +81,13 @@ const COMMANDS = [
     when: (ctx) => ctx.resumable,
   },
   {
+    id: "rewind",
+    title: "还原这次任务改过的文件",
+    hint: "先看清单，再确认",
+    icon: "↺",
+    when: (ctx) => ctx.hasTask,
+  },
+  {
     id: "export",
     title: "导出为 Markdown",
     hint: "整段对话与工具结果",
@@ -117,7 +124,14 @@ const COMMANDS = [
   },
 ];
 
-let context = { pending: false, running: false, resumable: false, reviewable: false, hasTranscript: false };
+let context = {
+  pending: false,
+  running: false,
+  resumable: false,
+  reviewable: false,
+  hasTranscript: false,
+  hasTask: false,
+};
 let items = [];
 let active = 0;
 let query = "";

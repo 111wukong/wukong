@@ -179,6 +179,8 @@ export function newRun() {
     tools: new Map(), // toolCallId -> { node, startedAt, name }
     plan: null,
     planSteps: [],
+    subagents: new Map(),
+    subagentGroup: null,
     interrupted: false,
     usage: 0,
     startedAt: performance.now(),
@@ -462,6 +464,18 @@ export function renderEvent(event) {
       setActivity("");
       break;
 
+    case "SUBAGENT_STARTED":
+      renderSubagent(run, event, "running");
+      break;
+
+    case "SUBAGENT_FINISHED":
+      renderSubagent(run, event, event.status === "completed" ? "ok" : "failed");
+      break;
+
+    case "SUBAGENT_ERROR":
+      renderSubagent(run, event, "failed", event.error);
+      break;
+
     case "CUSTOM":
       renderCustom(event);
       break;
@@ -519,6 +533,61 @@ function renderPlan(run) {
   } else if (total) {
     setActivity(`第 ${done}/${total} 步`, total ? done / total : 0);
   }
+}
+
+/* The fan-out, as a tree under the turn that caused it.
+ *
+ * A sub-agent's own events live under its own task id, so this stream can
+ * only ever show a summary -- which is the honest shape: one row per child,
+ * and a click to open the child's transcript. Pretending the parent stream
+ * carried the detail would be a second, thinner view that drifts.
+ */
+function renderSubagent(run, event, tone, error) {
+  const id = event.subagentRunId || `sub_${event.index ?? 0}`;
+  const existing = run.subagents.get(id);
+
+  if (tone === "running") {
+    if (!run.subagentGroup) {
+      const group = el("section", "subagent-group");
+      const head = el("div", "subagent-head");
+      head.append(el("span", "subagent-title", "子 Agent"));
+      head.append(el("span", "chip chip-accent", "并行"));
+      group.append(head);
+      run.subagentGroup = el("div", "subagent-rows");
+      group.append(run.subagentGroup);
+      run.assistant?.append(group);
+    }
+    const row = el("div", "subagent-row running");
+    row.append(el("span", "subagent-dot"));
+    row.append(el("span", "subagent-index", `#${Number(event.index ?? 0) + 1}`));
+    row.append(el("span", "subagent-goal", event.goal || "子任务"));
+    row.append(el("span", "subagent-state", "运行中"));
+    if (event.taskId) {
+      row.classList.add("linked");
+      row.onclick = () => emit("open-task", event.taskId);
+    }
+    run.subagentGroup.append(row);
+    run.subagents.set(id, row);
+    return;
+  }
+
+  const row = existing || el("div", "subagent-row");
+  if (!existing) run.subagentGroup?.append(row);
+  row.className = `subagent-row ${tone}${event.taskId ? " linked" : ""}`;
+  row.replaceChildren();
+  row.append(el("span", "subagent-dot"));
+  row.append(el("span", "subagent-index", `#${Number(event.index ?? 0) + 1}`));
+  row.append(el("span", "subagent-goal", event.goal || "子任务"));
+  const state = el(
+    "span",
+    "subagent-state",
+    tone === "ok" ? `${event.steps || 0} 步 · ${tokens(event.tokens || 0)}` : "失败",
+  );
+  row.append(state);
+  if (tone === "failed" && error) row.title = String(error);
+  if (event.summary) row.title = event.summary;
+  if (event.taskId) row.onclick = () => emit("open-task", event.taskId);
+  run.subagents.set(id, row);
 }
 
 function renderCustom(event) {

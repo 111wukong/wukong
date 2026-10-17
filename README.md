@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/111wukong/wukong/actions/workflows/ci.yml/badge.svg)](https://github.com/111wukong/wukong/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/111wukong/wukong)
-[![tests](https://img.shields.io/badge/tests-936%20offline-brightgreen)](https://github.com/111wukong/wukong)
+[![tests](https://img.shields.io/badge/tests-952%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 一个本地优先的通用 AI Agent 运行时。Python 3.11+，SQLite，无外部服务依赖。
@@ -355,7 +355,11 @@ curl -X POST http://127.0.0.1:8000/api/v1/tasks/<id>/approve \
 
 **3. 会话是一级对象。** 侧栏是「会话 → 任务」两级，按今天/昨天/本周分组，一次请求带聚合（任务数、成本、是否有待批准），不是 N+1。刷新页面会回到刚才那个任务 —— 包括停在审批上的那个。
 
-**4. 键盘优先。** `⌘K` 命令面板、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
+**4. 计划可以先批再跑。** 打开「先给计划」后，规划完成就停下来：步骤可以删、可以改写，批准后**你改过的那份计划才是契约**（`PLAN_APPROVED` 事件里存的就是它）。这是整个系统里唯一能在花钱之前省钱的闸门 —— 工具审批和预算都是在钱花掉之后才说话。
+
+**5. 键盘优先。** `⌘K` 命令面板（含「还原这次任务改过的文件」）、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
+
+状态栏还常驻**上下文占比**（最近一次 prompt 的 token / 窗口大小）。它和「花了多少 token」是两个问题：一次跑动可能累计花了 40 万 token，而当前 prompt 只占 2 万 —— 前者回答不了「下一步还塞不塞得下」。
 
 流式渲染是 O(n)：Markdown 按**空行边界**把已闭合的块解析一次并追加，只有尾部重解析。每收到一个 delta 就全量 `replaceChildren(renderMarkdown(全文))` 是 O(n²)，两千字左右开始掉帧 —— 这不是审美问题，是算术问题。
 
@@ -769,7 +773,7 @@ A2A **两个方向都默认关闭**：发布一个接受别的 Agent 派活儿�
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest -q                       # 936 条，全部离线，不需要 API key
+.venv/bin/python -m pytest -q                       # 952 条，全部离线，不需要 API key
 .venv/bin/python -m pytest tests/test_resume_semantics.py -v
 .venv/bin/ruff check src tests
 ```
