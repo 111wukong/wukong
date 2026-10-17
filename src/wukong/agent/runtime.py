@@ -329,7 +329,14 @@ class AgentRuntime:
         # A human decision taken while the task was paused. Both branches
         # re-enter the loop with the *same* call the model already chose --
         # asking the model again would let it silently pick something else.
-        if state.approved_pending is not None:
+        if state.approved_pending is not None and state.approved_pending.kind == "plan":
+            # There is no call to execute: `PLAN_APPROVED` already installed
+            # the steps. Running the "plan" tool here is what produced
+            # `unknown tool 'plan'` in the transcript -- a failure invented by
+            # the runtime, attributed to the model.
+            state.approved_pending = None
+            self._progress("approval_granted", {"tool": "plan", "effect": ""})
+        elif state.approved_pending is not None:
             pending = state.approved_pending
             state.approved_pending = None
             self._progress("approval_granted", {"tool": pending.tool, "effect": pending.effect})

@@ -141,13 +141,9 @@ def _progress_printer(quiet: bool):
         elif kind == "compacted":
             console.print("[dim]context compacted[/dim]")
         elif kind == "plan_approval":
-            console.print("[yellow]plan needs approval[/yellow]")
-            for i, step in enumerate(payload["steps"], 1):
-                console.print(f"  [dim]{i}.[/dim] {escape(str(step.get('description', '')))}")
-            console.print(
-                "[dim]approve with[/dim] wukong task approve <id> "
-                "[dim]or deny with[/dim] wukong task deny <id>"
-            )
+            # The steps are printed below, in the approval panel. Listing them
+            # twice makes the terminal look like it stuttered.
+            console.print("[yellow]waiting for the plan to be approved[/yellow]")
         elif kind == "verify_started":
             console.print(f"  [dim]verify[/dim] {escape(str(payload['command']))}")
         elif kind == "verify_finished":
@@ -187,14 +183,27 @@ def _warn_about_sandbox(agent, *, quiet: bool = False) -> None:
 def _print_result(result, *, quiet: bool = False) -> None:
     if result.needs_approval:
         pending = result.pending_confirmation
+        # A plan has no effect class: it is not an action, it is a direction.
+        # Printing "effect:" empty is the kind of detail that makes a UI look
+        # like it was assembled rather than designed.
+        if pending.kind == "plan":
+            # The steps were just printed above by the `plan` progress line.
+            # Repeating them here is the same list twice in a row, which reads
+            # as a stutter rather than as emphasis.
+            count = len((pending.arguments or {}).get("steps") or [])
+            lines = [f"计划已列出（{count} 步）。批准后按这份计划执行。"]
+        else:
+            lines = [f"[bold]{escape(pending.preview)}[/bold]"]
+        if pending.effect:
+            lines.append(f"effect: [yellow]{escape(pending.effect)}[/yellow]")
+        lines.append(f"reason: {escape(pending.reason)}")
+        lines.append(f"request: [dim]{pending.request_id}[/dim]")
+        title = "Plan needs approval" if pending.kind == "plan" else "Approval required"
         console.print()
         console.print(
             Panel(
-                f"[bold]{escape(pending.preview)}[/bold]\n\n"
-                f"effect: [yellow]{escape(pending.effect)}[/yellow]\n"
-                f"reason: {escape(pending.reason)}\n"
-                f"request: [dim]{pending.request_id}[/dim]",
-                title="[bold yellow]Approval required[/bold yellow]",
+                "\n".join(lines),
+                title=f"[bold yellow]{title}[/bold yellow]",
                 border_style="yellow",
             )
         )
@@ -617,6 +626,14 @@ def run(
         "--multi-agent",
         help="Expose the `delegate` tool so this task can fan out to sub-agents.",
     ),
+    plan: bool = typer.Option(
+        False,
+        "--plan",
+        help=(
+            "Pause after planning and wait for the plan to be approved. "
+            "Approve with `wukong task approve <id>`."
+        ),
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
     as_json: bool = typer.Option(False, "--json"),
     home: Optional[Path] = typer.Option(None, "--home"),
@@ -648,7 +665,11 @@ def run(
             )
             try:
                 result = await agent.runtime.run(
-                    goal, session_id=session_id, model_alias=model, max_steps=max_steps
+                    goal,
+                    session_id=session_id,
+                    model_alias=model,
+                    max_steps=max_steps,
+                    plan_approval=plan or None,
                 )
             except ModelError as exc:
                 err_console.print(escape(str(exc)))

@@ -80,6 +80,14 @@ class TestTheDecision:
         assert state.plan_approved is True
         assert [s.description for s in state.plan] == [s["description"] for s in proposed]
 
+        # Approving a plan must not try to *execute* it. The "plan" pseudo-tool
+        # does not exist, and running it produced a TOOL_FAILED that the model
+        # then had to reason about -- a failure invented by the runtime.
+        failed = [
+            e for e in agent.store.events(paused.task_id) if e.type is EventType.TOOL_FAILED
+        ]
+        assert not [e for e in failed if e.payload.get("name") == "plan"]
+
     async def test_edited_steps_are_the_contract(self, scripted, session_id: str) -> None:
         agent, _ = await scripted([{"content": "done"}])
         paused = await _run(agent, session_id)
