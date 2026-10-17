@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -230,6 +231,20 @@ class RunCommandTool(Tool):
         )
 
 
+def _is_pytest(argv: list[str]) -> bool:
+    """Whether this command runs pytest, in any of the three spellings.
+
+    `in argv` is membership, not substring: `"pytest" in ["x/pytest", ...]`
+    is False, which is exactly the bug this replaced -- the import path was
+    silently skipped and collection died with an ImportError that reads like
+    a broken test file. Written out long-hand for that reason.
+    """
+    for part in argv[:3]:
+        if part == "pytest" or part.endswith("/pytest") or part.endswith("\\pytest"):
+            return True
+    return False
+
+
 class RunTestsTool(Tool):
     spec = ToolSpec(
         name="run_tests",
@@ -269,18 +284,37 @@ class RunTestsTool(Tool):
         )
 
     def detect(self, workspace: Path) -> list[str]:
+        """The command that runs *this* project's tests.
+
+        Three tiers, most specific first. A bare `pytest` is not one of them:
+        it is what a workspace with no venv used to get, and the scrubbed
+        subprocess environment does not inherit the parent's PATH, so it
+        failed with `command not found` -- in exactly the situation the tool
+        exists for. Found by running a real task: the model tried `run_tests`
+        first, got that error, and had to fall back to `run_command`, which
+        is the outcome the tool description explicitly tells it to avoid.
+        """
         venv_bin = find_venv_bin(workspace)
         if venv_bin and (venv_bin / "pytest").exists():
-            pytest_cmd = str(venv_bin / "pytest")
+            pytest_cmd = [str(venv_bin / "pytest")]
+        elif venv_bin and (venv_bin / "python").exists():
+            # A venv without pytest installed: use the project's own
+            # interpreter and let it say "No module named pytest", which is
+            # an instruction, not a mystery.
+            pytest_cmd = [str(venv_bin / "python"), "-m", "pytest"]
         else:
-            pytest_cmd = "pytest"
+            # No venv at all. The interpreter running this is the one the
+            # project was installed into (`pip install -e ".[dev]"` puts
+            # pytest there), and `-m pytest` cannot resolve to some other
+            # project's runner the way a PATH lookup can.
+            pytest_cmd = [sys.executable, "-m", "pytest"]
         if (workspace / "pytest.ini").exists() or (workspace / "pyproject.toml").exists():
-            return [pytest_cmd, "-q", "--no-header"]
+            return [*pytest_cmd, "-q", "--no-header"]
         if (workspace / "package.json").exists():
             return ["npm", "test", "--silent"]
         if (workspace / "go.mod").exists():
             return ["go", "test", "./..."]
-        return [pytest_cmd, "-q", "--no-header"]
+        return [*pytest_cmd, "-q", "--no-header"]
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         cwd = Path(args["cwd"]) if args.get("cwd") else ctx.workspace
@@ -292,7 +326,7 @@ class RunTestsTool(Tool):
         # Only the Python runners care, and only `run_tests` knows the project
         # layout well enough to say which directories those are.
         runner_ctx = ctx
-        if argv[0].endswith("pytest") or argv[0] == "pytest":
+        if _is_pytest(argv):
             runner_ctx = replace(ctx, env=_with_project_importable(ctx.env, cwd))
         return await self._runner.run(
             {

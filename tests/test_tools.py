@@ -324,11 +324,22 @@ class TestVenvDetection:
         argv = RunTestsTool().detect(workspace)
         assert argv[0] == str(bin_dir / "pytest")
 
-    def test_run_tests_falls_back_to_bare_pytest(self, workspace) -> None:  # noqa: ANN001
+    def test_no_venv_does_not_fall_back_to_a_bare_pytest(self, workspace) -> None:  # noqa: ANN001
+        """The bug this replaced: `command not found` in the common case.
+
+        A bare `pytest` is not on the scrubbed subprocess PATH, so the tool
+        whose job is running tests failed at exactly that job. The head of
+        the command is now an interpreter that exists.
+        """
+        import sys
+
         from wukong.tools.shell import RunTestsTool
 
         (workspace / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
-        assert RunTestsTool().detect(workspace)[0] == "pytest"
+        argv = RunTestsTool().detect(workspace)
+        assert argv[0] not in ("pytest",), "a bare pytest cannot be found"
+        assert argv[0] == sys.executable
+        assert argv[1:3] == ["-m", "pytest"]
 
     def test_venv_is_prepended_to_path_for_subprocesses(self, workspace) -> None:  # noqa: ANN001
         from wukong.tools.shell import _with_venv_on_path
@@ -504,3 +515,62 @@ class TestFailedCommandsCarryAnExitCode:
         assert result.success is False
         assert "timed out" in (result.error or "")
         assert result.metadata["exit_code"] == 124
+
+
+class TestRunTestsPicksAnInterpreter:
+    """`run_tests` must find a pytest that actually exists.
+
+    The old fallback was a bare `pytest`, which is not on the scrubbed
+    subprocess PATH -- so in a workspace with no venv the tool that exists to
+    run tests failed with `command not found`, and the model had to fall back
+    to `run_command`, the one thing its description tells it not to do. Seen
+    in a real DeepSeek run.
+    """
+
+    def test_a_venv_with_pytest_wins(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.tools.shell import RunTestsTool
+
+        venv = tmp_path / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "pytest").write_text("#!/bin/sh\n", encoding="utf-8")
+        argv = RunTestsTool().detect(tmp_path)
+        assert argv[0] == str(venv / "pytest")
+
+    def test_a_venv_without_pytest_uses_its_python(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.tools.shell import RunTestsTool
+
+        venv = tmp_path / "venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("", encoding="utf-8")
+        argv = RunTestsTool().detect(tmp_path)
+        assert argv == [str(venv / "python"), "-m", "pytest", "-q", "--no-header"]
+
+    def test_no_venv_uses_the_running_interpreter(self, tmp_path) -> None:  # noqa: ANN001
+        import sys
+
+        from wukong.tools.shell import RunTestsTool
+
+        argv = RunTestsTool().detect(tmp_path)
+        assert argv == [sys.executable, "-m", "pytest", "-q", "--no-header"]
+
+    def test_npm_and_go_projects_keep_their_runner(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.tools.shell import RunTestsTool
+
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        assert RunTestsTool().detect(tmp_path)[:2] == ["npm", "test"]
+        (tmp_path / "package.json").unlink()
+        (tmp_path / "go.mod").write_text("module x\n", encoding="utf-8")
+        assert RunTestsTool().detect(tmp_path) == ["go", "test", "./..."]
+
+    async def test_it_actually_runs_in_a_workspace_with_no_venv(
+        self, ctx: ToolContext, workspace
+    ) -> None:  # noqa: ANN001
+        """The whole point: a scratch project with no venv must still work."""
+        from wukong.tools.shell import RunTestsTool
+
+        (workspace / "test_ok.py").write_text(
+            "def test_ok():\n    assert True\n", encoding="utf-8"
+        )
+        result = await RunTestsTool().run({}, ctx)
+        assert result.success, (result.error or result.output)[:300]
+        assert "1 passed" in result.output
