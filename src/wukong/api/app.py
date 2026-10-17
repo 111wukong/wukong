@@ -107,6 +107,16 @@ class FileWrite(BaseModel):
     base_sha: str | None = None
 
 
+class DenyIn(BaseModel):
+    """A refusal, with the reason when there is one.
+
+    The note matters most for a rejected plan: "not this" without a why leaves
+    the model to guess, and its guess is usually the same plan again.
+    """
+
+    note: str = ""
+
+
 class ApproveIn(BaseModel):
     """A decision on a pending call.
 
@@ -117,6 +127,9 @@ class ApproveIn(BaseModel):
 
     request_id: str | None = None
     accept_hunks: list[str] | None = None
+    #: The steps to run, when the pending decision is a plan. Omitted means
+    #: "the plan you proposed is fine"; a list is the edited contract.
+    plan: list[dict[str, Any]] | str | None = None
 
 
 class AgUiRunInput(BaseModel):
@@ -130,6 +143,10 @@ class AgUiRunInput(BaseModel):
     approve: list[str] = Field(default_factory=list)
     model: str | None = None
     max_steps: int | None = None
+    #: Pause after planning and wait for the steps to be accepted. A per-run
+    #: override of `agent.require_plan_approval`, so the console can offer it
+    #: as a switch without changing the server's defaults.
+    plan_approval: bool | None = None  # noqa: N815
 
 
 class SkillPromotion(BaseModel):
@@ -520,12 +537,16 @@ def create_app(
         _require_pending(svc, task_id)
         accepted = payload.accept_hunks if payload else None
         pending_request = (payload.request_id if payload else None) or request_id
+        steps = payload.plan if payload else None
+        if isinstance(steps, str):
+            raise HTTPException(status_code=400, detail="plan 必须是步骤数组")
         try:
-            # Synchronous up to the resume: an unknown hunk id, or a tool whose
-            # change cannot be sliced, is the caller's mistake and deserves a
-            # 400 rather than a background task that quietly writes everything.
+            # Synchronous up to the resume: an unknown hunk id, a tool whose
+            # change cannot be sliced, or an empty plan is the caller's
+            # mistake and deserves a 400 rather than a background task that
+            # quietly writes everything.
             running = svc.a.runtime.approve(
-                task_id, request_id=pending_request, accept=accepted
+                task_id, request_id=pending_request, accept=accepted, plan=steps
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -573,10 +594,61 @@ def create_app(
             "review": found,
         }
 
+    @app.get("/api/v1/tasks/{task_id}/rewind")
+    async def rewind_preview(task_id: str, from_seq: int = 0) -> dict[str, Any]:
+        """What restoring this task's file changes would do.
+
+        A preview is not a nicety here: a rewind deletes files that the task
+        created, and the only way to make that safe is to show exactly which
+        ones first. Planning and applying share one code path, so the preview
+        cannot disagree with the outcome.
+        """
+        from wukong.agent.rewind import plan_rewind
+
+        if svc.a.store.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
+        plan = plan_rewind(svc.a.store, task_id, from_seq=from_seq)
+        return {
+            "task_id": task_id,
+            "steps": [
+                {
+                    "path": step.path,
+                    "action": step.action,
+                    "reason": step.reason,
+                    "bytes": step.bytes,
+                    "current_bytes": step.current_bytes,
+                }
+                for step in plan.steps
+            ],
+            "actionable": len(plan.actionable),
+            "blocked": len(plan.blocked),
+            "render": plan.render(),
+        }
+
+    @app.post("/api/v1/tasks/{task_id}/rewind")
+    async def rewind_apply(task_id: str, from_seq: int = 0) -> dict[str, Any]:
+        from wukong.agent.rewind import apply_rewind, plan_rewind
+
+        if svc.a.store.get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
+        plan = plan_rewind(svc.a.store, task_id, from_seq=from_seq)
+        if not plan.actionable:
+            return {"task_id": task_id, "restored": 0, "output": plan.render()}
+        lines = list(apply_rewind(plan))
+        return {
+            "task_id": task_id,
+            "restored": len(plan.actionable),
+            "blocked": len(plan.blocked),
+            "output": "\n".join(lines),
+        }
+
     @app.post("/api/v1/tasks/{task_id}/deny")
-    async def deny(task_id: str, note: str = "") -> dict[str, Any]:
+    async def deny(
+        task_id: str, note: str = "", payload: DenyIn | None = None
+    ) -> dict[str, Any]:
         _require_pending(svc, task_id)
-        svc.track(task_id, svc.a.runtime.deny(task_id, note=note))
+        reason = (payload.note if payload else "") or note
+        svc.track(task_id, svc.a.runtime.deny(task_id, note=reason))
         return {"id": task_id, "status": "running"}
 
     @app.post("/api/v1/tasks/{task_id}/cancel")
@@ -928,6 +1000,12 @@ def _task_view(svc: Service, task_id: str) -> dict[str, Any]:
         else None,
         "events": svc.a.store.last_seq(task_id),
         "budgets": _budgets(svc, task_id),
+        # "How full is the window" is a different question from "how much have
+        # I spent", and the second one cannot answer it: a run can spend 400k
+        # tokens across steps while its prompt sits comfortably at 20k.
+        "context": _context(state, svc, task_id),
+        "plan_approved": state.plan_approved,
+        "pending_kind": state.pending_confirmation.kind if state.pending_confirmation else None,
     }
 
 
@@ -943,6 +1021,16 @@ def _budgets(svc: Service, task_id: str) -> dict[str, Any]:
         if getattr(event.type, "value", event.type) == "task_created":
             return dict((event.payload or {}).get("budgets") or {})
     return {}
+
+
+def _context(state: Any, svc: Service, task_id: str) -> dict[str, Any]:
+    limit = int(_budgets(svc, task_id).get("max_context_tokens") or 0)
+    used = int(getattr(state, "last_prompt_tokens", 0) or 0)
+    return {
+        "used": used,
+        "limit": limit,
+        "ratio": round(used / limit, 4) if limit else 0.0,
+    }
 
 
 def _require_pending(svc: Service, task_id: str) -> None:
@@ -1116,6 +1204,7 @@ async def _agui_stream(svc: Service, payload: AgUiRunInput) -> AsyncIterator[str
         model_alias=payload.model,
         approved_effects=_grantable(payload.approve),
         max_steps=payload.max_steps,
+        plan_approval=payload.plan_approval,
         task_id=task_id,
         prior_context=_prior_context(agent.store, session_id),
     )

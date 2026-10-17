@@ -1471,3 +1471,134 @@ class TestSessionHistory:
             scoped = client.get(f"/api/v1/tasks?session_id={first}").json()
 
         assert [t["goal"] for t in scoped] == ["in a"]
+
+
+class TestPlanApproval:
+    """The plan gate over the wire.
+
+    The runtime tests cover the semantics; these cover the two things a client
+    depends on: the stream ends on the pause instead of hanging, and the steps
+    the client sends back are the steps that run.
+    """
+
+    def test_the_stream_ends_on_a_plan_pause(self, api) -> None:  # noqa: ANN001
+        client = api([{"content": "done"}])
+        with client:
+            events = parse_sse(
+                client.post(
+                    "/agui",
+                    json={
+                        "messages": [{"role": "user", "content": "整理项目"}],
+                        "plan_approval": True,
+                    },
+                ).text
+            )
+        assert types_of(events)[-1] == "RUN_FINISHED"
+        outcome = events[-1]["outcome"]
+        assert outcome["type"] == "interrupt"
+        interrupt = outcome["interrupts"][0]
+        assert interrupt["kind"] == "plan"
+        assert interrupt["plan"], "the pause must carry the steps it is about"
+        assert "TOOL_CALL_START" not in types_of(events)
+
+    def test_approving_with_edited_steps_uses_them(self, api) -> None:  # noqa: ANN001
+        client = api([{"content": "done"}])
+        with client:
+            events = parse_sse(
+                client.post(
+                    "/agui",
+                    json={
+                        "messages": [{"role": "user", "content": "整理项目"}],
+                        "plan_approval": True,
+                    },
+                ).text
+            )
+            task_id = events[0]["taskId"]
+            response = client.post(
+                f"/api/v1/tasks/{task_id}/approve",
+                json={"plan": [{"description": "只做这一件事"}]},
+            )
+            assert response.status_code == 200, response.text
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            detail = client.get(f"/api/v1/tasks/{task_id}").json()
+
+        assert detail["plan_approved"] is True
+        assert [step["description"] for step in detail["plan"]] == ["只做这一件事"]
+
+    def test_an_empty_plan_is_a_400(self, api) -> None:  # noqa: ANN001
+        client = api([{"content": "done"}])
+        with client:
+            events = parse_sse(
+                client.post(
+                    "/agui",
+                    json={
+                        "messages": [{"role": "user", "content": "整理项目"}],
+                        "plan_approval": True,
+                    },
+                ).text
+            )
+            task_id = events[0]["taskId"]
+            response = client.post(f"/api/v1/tasks/{task_id}/approve", json={"plan": []})
+
+        assert response.status_code == 400
+        assert "计划不能为空" in response.text
+
+
+class TestRewind:
+    """Undoing a task's writes, preview first.
+
+    The preview is the feature: a rewind deletes files the task created, and a
+    destructive action with no list of what it will touch is one nobody should
+    use.
+    """
+
+    def test_a_task_with_no_writes_has_nothing_to_rewind(self, api) -> None:  # noqa: ANN001
+        client = api([{"content": "nothing"}])
+        with client:
+            created = client.post("/api/v1/tasks", json={"goal": "look"}).json()
+            task_id = created.get("task_id") or created.get("id")
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            body = client.get(f"/api/v1/tasks/{task_id}/rewind").json()
+
+        assert body["steps"] == []
+        assert body["actionable"] == 0
+
+    def test_a_write_can_be_previewed_and_undone(self, api, workspace, settings) -> None:  # noqa: ANN001
+        from wukong.tools.permissions import Decision
+        from wukong.types import EffectClass
+
+        settings.permissions.defaults[EffectClass.WRITE_LOCAL] = Decision.CONFIRM
+        original = (workspace / "notes.md").read_text(encoding="utf-8")
+        client = api(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "name": "write_file",
+                            "arguments": {"path": "notes.md", "content": "# changed\n"},
+                        }
+                    ]
+                }
+            ]
+        )
+        with client:
+            created = client.post("/api/v1/tasks", json={"goal": "edit notes"}).json()
+            task_id = created.get("task_id") or created.get("id")
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            client.post(f"/api/v1/tasks/{task_id}/approve")
+            client.post(f"/api/v1/tasks/{task_id}/wait", json={"timeout_s": 10})
+            assert (workspace / "notes.md").read_text(encoding="utf-8") == "# changed\n"
+
+            preview = client.get(f"/api/v1/tasks/{task_id}/rewind").json()
+            assert preview["actionable"] == 1
+            assert preview["steps"][0]["path"].endswith("notes.md")
+            assert preview["steps"][0]["action"] == "restore"
+
+            applied = client.post(f"/api/v1/tasks/{task_id}/rewind").json()
+
+        assert applied["restored"] == 1
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == original
+
+    def test_an_unknown_task_is_a_404(self, api) -> None:  # noqa: ANN001
+        with api([]) as client:
+            assert client.get("/api/v1/tasks/nope/rewind").status_code == 404

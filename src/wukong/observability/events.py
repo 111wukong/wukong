@@ -57,6 +57,14 @@ class EventType(str, Enum):
 
     # human in the loop
     CONFIRMATION_REQUESTED = "confirmation_requested"
+    #: The plan a run intends to follow, accepted by a human -- possibly after
+    #: editing or removing steps. A separate event from CONFIRMATION_GRANTED
+    #: because what it changes is the plan itself, and the plan is what the
+    #: rest of the run is measured against.
+    PLAN_APPROVED = "plan_approved"
+    #: "Not this plan." Clears the plan so the next step of the loop plans
+    #: again, with the human's note in the log as the reason.
+    PLAN_REJECTED = "plan_rejected"
     #: The human accepted the call with a narrower scope than it was proposed
     #: with -- currently "these hunks, not those". Recorded as an event rather
     #: than kept in memory because `resume` replays state: a revision living

@@ -440,6 +440,12 @@ class AgentConfig(BaseModel):
     # it costs one extra model call per task, and that is a cost the user
     # should opt into. `wukong run --reflect` and the HTTP layer both set it.
     reflect: bool = False
+    # Pause after planning, before the first tool call, and wait for a human
+    # to accept the steps. Off by default because it turns every run into two
+    # interactions -- but it is the only gate that can save money rather than
+    # spend it: the expensive mistake is a correct execution of the wrong
+    # plan, and every other gate fires after the tokens are already gone.
+    require_plan_approval: bool = False
 
 
 class McpServerConfig(BaseModel):

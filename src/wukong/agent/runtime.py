@@ -209,6 +209,7 @@ class AgentRuntime:
         parent_task_id: str | None = None,
         reflect: bool | None = None,
         prior_context: str = "",
+        plan_approval: bool | None = None,
     ) -> AgentResult:
         """`task_id` lets a caller subscribe to the event stream *before* the
         task exists. Without it the SSE endpoint races the first events.
@@ -234,6 +235,18 @@ class AgentRuntime:
             # session carries it too, but a task that describes itself does
             # not depend on a join to answer "where does this act".
             "workspace": str(self.settings.workspace),
+            # Pausing for plan approval is a property of the task, not of the
+            # process that started it, so it is recorded next to the other
+            # budgets and folded back on resume.
+            "require_plan_approval": (
+                self.settings.agent.require_plan_approval
+                if plan_approval is None
+                else bool(plan_approval)
+            ),
+            # The window this run is working in, recorded here because the
+            # model's capabilities are known at this point and asking again
+            # later would mean constructing a client to read a constant.
+            "max_context_tokens": getattr(model.capabilities, "max_context_tokens", 0),
         }
         task_id = self.store.create_task(
             session_id=session_id,
@@ -250,6 +263,7 @@ class AgentRuntime:
             deadline=budgets["deadline"],
             approved_effects=effects,
             prior_context=prior_context,
+            require_plan_approval=budgets["require_plan_approval"],
         )
         self._context = ContextBuilder(
             settings=self.settings,
@@ -336,6 +350,41 @@ class AgentRuntime:
         elif state.denied_pending is not None:
             pending = state.denied_pending
             state.denied_pending = None
+            if pending.kind == "plan":
+                # "Not this plan" is not a refusal of permission, so it does
+                # not touch the refusal streak. It clears the plan and lets
+                # the loop plan again, with the human's words in the log.
+                note = ""
+                for event in reversed(events):
+                    if event.type is EventType.CONFIRMATION_DENIED:
+                        note = str(event.payload.get("note") or "")
+                        break
+                self.store.append(
+                    task_id,
+                    EventType.PLAN_REJECTED,
+                    {"request_id": pending.request_id, "note": note},
+                )
+                state.append_log(
+                    LogEntry(
+                        index=0,
+                        kind="system",
+                        text=(
+                            "The user rejected the plan"
+                            + (f" with this note: {note}" if note else "")
+                            + ". Produce a different plan; do not simply repeat the steps "
+                            "that were removed."
+                        ),
+                    )
+                )
+                self.store.append(
+                    task_id, EventType.LOG_APPENDED, {"entry": state.log[-1].model_dump(mode="json")}
+                )
+                self._persist(state)
+                await self._resolve_unfinished_calls(state)
+                result = await self._drive(state, max_steps=max_steps or self.settings.agent.max_steps)
+                await self._reflect(state, result)
+                return result
+
             limit = self.settings.permissions.confirmations.denial_limit
             remaining = limit - state.denied_streak
             if limit > 0 and remaining <= 0:
@@ -384,6 +433,7 @@ class AgentRuntime:
         *,
         request_id: str | None = None,
         accept: list[str] | None = None,
+        plan: list[dict[str, Any]] | None = None,
     ):
         """Approve the pending call, optionally narrowed to some hunks.
 
@@ -409,6 +459,25 @@ class AgentRuntime:
             return _resolved(self._result(state, duration=0.0))
         if request_id and request_id != pending.request_id:
             raise ValueError(f"request {request_id!r} is not pending; {pending.request_id!r} is")
+
+        if pending.kind == "plan":
+            # The human's steps, or the proposed ones when they only pressed
+            # "approve". Either way the plan becomes a contract: the loop is
+            # measured against it from here on.
+            steps = _normalise_plan(plan) if plan is not None else list(
+                pending.arguments.get("steps") or []
+            )
+            if not steps:
+                raise ValueError("计划不能为空：至少保留一个步骤")
+            self.store.append(
+                task_id, EventType.PLAN_APPROVED, {"steps": steps, "edited": plan is not None}
+            )
+            self.store.append(
+                task_id,
+                EventType.CONFIRMATION_GRANTED,
+                {"request_id": pending.request_id, "kind": "plan", "tool": "plan", "effect": ""},
+            )
+            return self.resume(task_id)
 
         accepted_ids: list[str] | None = None
         if accept is not None:
@@ -437,6 +506,7 @@ class AgentRuntime:
             EventType.CONFIRMATION_GRANTED,
             {
                 "request_id": pending.request_id,
+                "kind": pending.kind,
                 "tool": pending.tool,
                 "effect": pending.effect,
                 **({"accepted_hunks": accepted_ids} if accepted_ids is not None else {}),
@@ -490,6 +560,9 @@ class AgentRuntime:
                 {"steps": [s.model_dump(mode="json") for s in steps]},
             )
             self._progress("plan", {"steps": [s.description for s in steps]})
+
+        if state.require_plan_approval and not state.plan_approved:
+            return self._pause_for_plan(state, started)
 
         self._transition(state, TaskStatus.RUNNING)
 
@@ -1122,6 +1195,55 @@ class AgentRuntime:
         )
         return self._result(state, duration=time.time() - started)
 
+    def _pause_for_plan(self, state: AgentState, started: float) -> AgentResult:
+        """Stop after planning, before the first tool call.
+
+        Every other gate in this runtime fires after the money is spent: the
+        tool approval fires once the model has already decided what to do,
+        and the budget fires once the budget is gone. This is the only one
+        that can prevent an expensive mistake instead of reporting it.
+
+        It reuses the confirmation container rather than inventing a second
+        pause mechanism, because a plan decision and a tool decision are the
+        same shape -- stop, ask, record the answer, resume -- and two
+        mechanisms would be two places to get the resume semantics wrong.
+        """
+        request_id = f"plan_{uuid.uuid4().hex[:10]}"
+        steps = [s.model_dump(mode="json") for s in state.plan]
+        pending = PendingConfirmation(
+            request_id=request_id,
+            step_id=state.step_id(),
+            kind="plan",
+            tool="plan",
+            arguments={"steps": steps},
+            effect="",
+            reason="执行前确认计划：可以删掉步骤、改写描述，或者让 Agent 重新规划。",
+            preview="\n".join(
+                f"{index + 1}. {step.get('description', '')}" for index, step in enumerate(steps)
+            ),
+        )
+        state.pending_confirmation = pending
+        state.status = TaskStatus.WAITING_CONFIRMATION
+        self.store.append(
+            state.task_id,
+            EventType.CONFIRMATION_REQUESTED,
+            {
+                "request_id": request_id,
+                "step_id": pending.step_id,
+                "kind": "plan",
+                "tool": "plan",
+                "arguments": pending.arguments,
+                "effect": "",
+                "reason": pending.reason,
+                "preview": pending.preview,
+                "identity": {},
+                "review": None,
+            },
+        )
+        self._persist(state)
+        self._progress("plan_approval", {"steps": steps})
+        return self._result(state, duration=time.time() - started)
+
     def _complete(self, state: AgentState, answer: str, started: float) -> AgentResult:
         state.answer = answer
         state.status = TaskStatus.COMPLETED
@@ -1243,6 +1365,41 @@ class AgentRuntime:
                 self.on_progress(kind, payload)
             except Exception:  # noqa: BLE001 - UI must never break a task
                 pass
+
+
+def _normalise_plan(steps: list[Any]) -> list[dict[str, Any]]:
+    """The steps a human actually kept, in the shape the runtime stores.
+
+    Accepts bare strings as well as objects, because the console sends objects
+    but a script should not have to know the internal shape to say "do these
+    three things". Empty descriptions are dropped rather than rejected: an
+    edited plan with a blank row is a row the user cleared, not an error.
+    """
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(steps[:12]):
+        if isinstance(raw, str):
+            description = raw.strip()
+            expected: list[str] = []
+        elif isinstance(raw, dict):
+            description = str(raw.get("description") or "").strip()
+            expected = [str(name) for name in (raw.get("expected_tools") or []) if name]
+        else:
+            continue
+        if not description:
+            continue
+        out.append(
+            {
+                "id": f"step_{index + 1}",
+                "description": description[:400],
+                "expected_tools": expected,
+                # A re-numbered plan starts from the beginning: the cursor is
+                # derived from the checklist, and inheriting a status from a
+                # step that was moved would start the run mid-plan.
+                "status": "pending",
+                "note": "",
+            }
+        )
+    return out
 
 
 def _describe_signature(state: AgentState, signature: str) -> tuple[str, str]:

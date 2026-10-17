@@ -163,6 +163,58 @@ def step_finished(step_name: str) -> dict[str, Any]:
     return event
 
 
+def subagent_started(payload: dict[str, Any]) -> dict[str, Any]:
+    """A fan-out child has begun.
+
+    AG-UI names the family `SUBAGENT_*` and carries `subagentRunId` for
+    attribution. Ours adds the child's `taskId`, because the child's own events
+    live under that id -- so "show me what that sub-agent actually did" is a
+    link rather than a second stream this one cannot carry.
+    """
+    event = _base("SUBAGENT_STARTED")
+    event.update(
+        {
+            "subagentRunId": payload.get("task_id") or f"sub_{payload.get('index', 0)}",
+            "index": payload.get("index", 0),
+            "goal": payload.get("goal", ""),
+            "taskId": payload.get("task_id", ""),
+        }
+    )
+    return event
+
+
+def subagent_finished(payload: dict[str, Any]) -> dict[str, Any]:
+    event = _base("SUBAGENT_FINISHED")
+    event.update(
+        {
+            "subagentRunId": payload.get("task_id") or f"sub_{payload.get('index', 0)}",
+            "index": payload.get("index", 0),
+            "goal": payload.get("goal", ""),
+            "taskId": payload.get("task_id", ""),
+            "status": payload.get("status", ""),
+            "summary": payload.get("summary", ""),
+            "steps": payload.get("steps", 0),
+            "tokens": payload.get("tokens", 0),
+            "reportPath": payload.get("report_path"),
+        }
+    )
+    return event
+
+
+def subagent_error(payload: dict[str, Any]) -> dict[str, Any]:
+    event = _base("SUBAGENT_ERROR")
+    event.update(
+        {
+            "subagentRunId": payload.get("task_id") or f"sub_{payload.get('index', 0)}",
+            "index": payload.get("index", 0),
+            "goal": payload.get("goal", ""),
+            "taskId": payload.get("task_id", ""),
+            "error": payload.get("error") or "sub-agent failed",
+        }
+    )
+    return event
+
+
 def state_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     event = _base("STATE_SNAPSHOT")
     event["snapshot"] = snapshot
@@ -383,6 +435,15 @@ class AgUiEncoder:
             )
         ]
 
+    def _on_subagent_started(self, event: Event) -> list[dict[str, Any]]:
+        return [subagent_started(event.payload)]
+
+    def _on_subagent_completed(self, event: Event) -> list[dict[str, Any]]:
+        return [subagent_finished(event.payload)]
+
+    def _on_subagent_failed(self, event: Event) -> list[dict[str, Any]]:
+        return [subagent_error(event.payload)]
+
     def _on_memory_written(self, event: Event) -> list[dict[str, Any]]:
         return [custom("memory_written", {"content": event.payload.get("content")})]
 
@@ -422,6 +483,7 @@ def interrupt_for(pending: Any) -> dict[str, Any]:
     return {
         "id": pending.request_id,
         "reason": "approval_required",
+        "kind": getattr(pending, "kind", "tool"),
         "tool": pending.tool,
         "effect": pending.effect,
         "arguments": pending.arguments,
@@ -431,6 +493,12 @@ def interrupt_for(pending: Any) -> dict[str, Any]:
         # knows about `preview` keeps working; a client that can render a
         # changeset does not need a second round trip while the run is paused.
         "review": getattr(pending, "review", None),
+        # The steps, when this is a plan decision. A client that only knows
+        # about `preview` still sees a readable list; a client that can render
+        # an editor gets the structure.
+        "plan": (pending.arguments or {}).get("steps")
+        if getattr(pending, "kind", "tool") == "plan"
+        else None,
     }
 
 
@@ -450,12 +518,16 @@ def interrupt_from_event(event: Event) -> dict[str, Any]:
     return {
         "id": payload.get("request_id"),
         "reason": "approval_required",
+        "kind": payload.get("kind", "tool"),
         "tool": payload.get("tool"),
         "effect": payload.get("effect"),
         "arguments": payload.get("arguments") or {},
         "preview": payload.get("preview") or "",
         "detail": payload.get("reason") or "",
         "review": payload.get("review"),
+        "plan": (payload.get("arguments") or {}).get("steps")
+        if payload.get("kind") == "plan"
+        else None,
     }
 
 

@@ -156,6 +156,11 @@ def _compact_args(args: dict[str, Any], limit: int = 160) -> str:
 class PendingConfirmation(BaseModel):
     request_id: str
     step_id: str
+    #: What kind of decision this is. `tool` is the ordinary "may I run this";
+    #: `plan` is "is this the right plan". They share a container because they
+    #: share everything that matters -- a pause, a human decision, a resume --
+    #: and differ only in what the answer is applied to.
+    kind: str = "tool"
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     effect: str = ""
@@ -177,6 +182,14 @@ class AgentState(BaseModel):
     status: TaskStatus = TaskStatus.PENDING
     plan: list[PlanStep] = Field(default_factory=list)
     current_step: int = 0
+    #: Whether a human has accepted the plan. Only consulted when the run is
+    #: configured to ask; a plan that nobody asked about is approved by
+    #: definition, and pretending otherwise would make the gate leak into
+    #: every default run.
+    plan_approved: bool = False
+    #: Whether this run asked for plan approval at all. Recorded on the task
+    #: so a resume keeps the same contract as the run it is resuming.
+    require_plan_approval: bool = False
     log: list[LogEntry] = Field(default_factory=list)
     # Number of log entries dropped by compaction. Keeps display indices
     # monotonic so "[12]" still refers to the same thing after a compaction.
@@ -200,6 +213,8 @@ class AgentState(BaseModel):
     steps_used: int = 0
     model_calls: int = 0
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    #: Prompt tokens of the most recent model call -- the current context size.
+    last_prompt_tokens: int = 0
     pending_confirmation: PendingConfirmation | None = None
     # A call the user approved (or refused) while the task was paused. Kept
     # separately from `pending_confirmation` so that resume() can execute the
@@ -313,6 +328,10 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             state.started_at = float(budgets.get("started_at") or 0.0)
             state.workspace = str(budgets.get("workspace") or "")
             state.approved_effects = list(budgets.get("approved_effects") or [])
+            # Folded from the task's own record, like the other budgets: the
+            # gate is a property of the run, and a resume must not silently
+            # drop it just because the process was started without the flag.
+            state.require_plan_approval = bool(budgets.get("require_plan_approval"))
             state.status = TaskStatus.PENDING
 
         elif kind is EventType.PLAN_CREATED:
@@ -322,6 +341,21 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
         elif kind is EventType.PLAN_REVISED:
             state.plan = [PlanStep(**s) for s in payload.get("steps") or []]
             state.current_step = int(payload.get("current_step") or 0)
+
+        elif kind is EventType.PLAN_APPROVED:
+            # The human's version wins, including the steps they removed: a
+            # plan they edited is the contract, and the agent's original is
+            # only a proposal.
+            state.plan = [PlanStep(**s) for s in payload.get("steps") or []]
+            state.plan_approved = True
+            state.current_step = 0
+
+        elif kind is EventType.PLAN_REJECTED:
+            # Cleared rather than kept: `_drive` re-plans when there is no
+            # plan, which is exactly what "give me a different plan" means.
+            state.plan = []
+            state.plan_approved = False
+            state.current_step = 0
 
         elif kind is EventType.LOG_APPENDED:
             entry = LogEntry(**payload["entry"])
@@ -345,6 +379,10 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             state.model_calls += 1
             usage = payload.get("usage") or {}
             state.usage = state.usage + TokenUsage(**usage)
+            # The size of the *last* prompt, not the sum of all of them. The
+            # question a context meter answers is "how full is the window
+            # right now", and a cumulative total answers a different one.
+            state.last_prompt_tokens = int(usage.get("prompt_tokens") or 0)
             # Derive the step counter from events rather than trusting the
             # in-memory counter. Otherwise `resume` resets it to zero and the
             # step budget can be reset indefinitely by resuming in a loop.
@@ -361,6 +399,7 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             state.pending_confirmation = PendingConfirmation(
                 request_id=payload["request_id"],
                 step_id=payload.get("step_id", ""),
+                kind=payload.get("kind", "tool"),
                 tool=payload.get("tool", ""),
                 arguments=payload.get("arguments") or {},
                 effect=payload.get("effect", ""),
@@ -402,7 +441,12 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             request = state.pending_confirmation
             if request and request.request_id == payload.get("request_id"):
                 state.denied_pending = request
-                state.denied_streak += 1
+                # A rejected plan is not a permission refusal. Counting it
+                # would let two "try a different plan" answers trip the
+                # refusal limit and stop the task, which is the opposite of
+                # what the human asked for.
+                if request.kind != "plan":
+                    state.denied_streak += 1
             state.pending_confirmation = None
             state.status = TaskStatus.RUNNING
 
