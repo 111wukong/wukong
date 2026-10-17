@@ -248,6 +248,23 @@ def _convert(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
             )
             out.append({"role": "assistant", "content": blocks})
             continue
+        if msg.images:
+            # Anthropic's shape: a text block plus one image block per
+            # attachment, the bytes inline. Same file, different envelope.
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": msg.content}]
+            blocks.extend(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": ref.media_type,
+                        "data": ref.read_b64(),
+                    },
+                }
+                for ref in msg.images
+            )
+            out.append({"role": msg.role, "content": blocks})
+            continue
         out.append({"role": msg.role, "content": msg.content})
     return "\n\n".join(p for p in system_parts if p), out
 

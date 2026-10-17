@@ -1847,3 +1847,63 @@ kbd {
   word-break: break-word;
 }
 .verify-card.open .verify-output { display: block; }
+
+/* attachments ---------------------------------------------------------- */
+
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px 2px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px 4px 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  max-width: 220px;
+}
+.attach-thumb {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: none;
+  background: var(--bg-input);
+}
+.attach-name {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 96px;
+}
+.attach-size { font: 500 10px/1 var(--mono); color: var(--text-faint); flex: none; }
+.attach-drop {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.attach-drop:hover { background: var(--danger-soft); color: var(--danger); }
+
+/* the row under a user turn that carried images */
+.attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.attach-row .attach-thumb { width: 64px; height: 64px; cursor: zoom-in; }
+
+.composer-box.dropping { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-line); }

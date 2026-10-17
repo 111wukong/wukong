@@ -32,6 +32,7 @@ from wukong.agent.executor import FINISH_TOOL, PLAN_TOOL, SKILL_TOOL, ToolRunner
 from wukong.agent.planner import Planner, apply_plan_update
 from wukong.agent import repetition
 from wukong.agent.repetition import call_signature
+from wukong.agent.context import require_vision
 from wukong.agent.state import (
     WRITE_TOOLS,
     AgentState,
@@ -51,7 +52,7 @@ from wukong.review import revise as review_revise
 from wukong.tools.base import ToolContext
 from wukong.tools.permissions import PermissionEngine, scrub_env
 from wukong.tools.registry import ToolRegistry
-from wukong.types import EffectClass, TokenUsage, ToolCall
+from wukong.types import EffectClass, ImageRef, TokenUsage, ToolCall
 
 ProgressHook = Callable[[str, dict[str, Any]], None]
 
@@ -213,6 +214,7 @@ class AgentRuntime:
         reflect: bool | None = None,
         prior_context: str = "",
         plan_approval: bool | None = None,
+        images: list[ImageRef] | None = None,
     ) -> AgentResult:
         """`task_id` lets a caller subscribe to the event stream *before* the
         task exists. Without it the SSE endpoint races the first events.
@@ -225,6 +227,19 @@ class AgentRuntime:
         model = self.models.get(model_alias)
         self._model = model
         effects = [e.value for e in (approved_effects or [])]
+
+        # Checked before the task exists, not after the first step. An
+        # attachment the model cannot receive is a settings mistake, and the
+        # cheapest place to say so is before a single event is written -- the
+        # alternative is a task that fails on step 1 having already recorded
+        # a plan it was never allowed to act on.
+        state_pre = AgentState(
+            task_id="pre", session_id=session_id, goal=goal, images=list(images or [])
+        )
+        require_vision(model, state_pre)
+        for ref in images or []:
+            if not Path(ref.path).is_file():
+                raise FileNotFoundError(f"attachment is gone: {ref.path}")
 
         budgets = {
             "max_steps": max_steps or self.settings.agent.max_steps,
@@ -250,6 +265,10 @@ class AgentRuntime:
             # model's capabilities are known at this point and asking again
             # later would mean constructing a client to read a constant.
             "max_context_tokens": getattr(model.capabilities, "max_context_tokens", 0),
+            # References, never bytes: the files are under home, and a resume
+            # must rebuild the same prompt the model was originally asked to
+            # look at.
+            "images": [ref.model_dump(mode="json") for ref in (images or [])],
         }
         task_id = self.store.create_task(
             session_id=session_id,
@@ -267,6 +286,7 @@ class AgentRuntime:
             approved_effects=effects,
             prior_context=prior_context,
             require_plan_approval=budgets["require_plan_approval"],
+            images=list(images or []),
         )
         self._context = ContextBuilder(
             settings=self.settings,

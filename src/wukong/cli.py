@@ -21,6 +21,7 @@ from wukong.agent.factory import build_agent, default_skill_dirs
 from wukong.agent.state import TaskStatus
 from wukong.demo import run_review_demo
 from wukong.observability.events import EventType
+from wukong.attachments import AttachmentError, ref_from_file
 from wukong.config import (
     ConfigEditor,
     Settings,
@@ -635,6 +636,14 @@ def run(
             "Approve with `wukong task approve <id>`."
         ),
     ),
+    image: list[Path] = typer.Option(
+        [],
+        "--image",
+        help=(
+            "Attach an image to the goal (png/jpeg/gif/webp, <=5MB). "
+            "Repeatable. The file itself is referenced, not copied."
+        ),
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
     as_json: bool = typer.Option(False, "--json"),
     home: Optional[Path] = typer.Option(None, "--home"),
@@ -665,12 +674,20 @@ def run(
                 model_alias=model or settings.default_model,
             )
             try:
+                images = []
+                for path in image:
+                    try:
+                        images.append(ref_from_file(path))
+                    except AttachmentError as exc:
+                        err_console.print(f"[red]附件失败[/red] {exc}")
+                        raise typer.Exit(4) from exc
                 result = await agent.runtime.run(
                     goal,
                     session_id=session_id,
                     model_alias=model,
                     max_steps=max_steps,
                     plan_approval=plan or None,
+                    images=images,
                 )
             except ModelError as exc:
                 err_console.print(escape(str(exc)))

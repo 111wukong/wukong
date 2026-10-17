@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Iterable, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,7 @@ from wukong import __version__
 from wukong.agent.factory import Agent, build_agent
 from wukong.agent.state import replay
 from wukong.api import agui
+from wukong.attachments import AttachmentError, save_attachments
 from wukong.config import Settings, load_settings
 from wukong.observability.events import EventType
 from wukong.storage.store import new_id
@@ -83,12 +84,30 @@ class SessionIn(BaseModel):
     model: str | None = None
 
 
+class ImageIn(BaseModel):
+    """An attachment as it arrives over the wire.
+
+    `data` is base64, with or without the `data:` prefix -- a browser sends
+    the prefixed form and a script the bare one, and refusing the shape the
+    sender did not choose is a self-inflicted error. Validated and written by
+    `wukong.attachments`; see there for the type and size ceilings.
+    """
+
+    name: str = ""
+    media_type: str = "image/png"
+    data: str
+
+
 class TaskIn(BaseModel):
     goal: str = Field(min_length=1)
     session_id: str | None = None
     model: str | None = None
     max_steps: int | None = None
     approve: list[str] = Field(default_factory=list)
+    #: Images to attach to the goal. The bytes are written under
+    #: `home/attachments/<task_id>/` before the run starts; the event log
+    #: records where they are, never what they contain.
+    images: list[ImageIn] = Field(default_factory=list)
 
 
 class AgUiMessage(BaseModel):
@@ -147,6 +166,11 @@ class AgUiRunInput(BaseModel):
     #: override of `agent.require_plan_approval`, so the console can offer it
     #: as a switch without changing the server's defaults.
     plan_approval: bool | None = None  # noqa: N815
+    #: Images to attach to the goal. Not part of the AG-UI spec -- it is an
+    #: additive field this runtime reads, so a spec-conformant client that
+    #: omits it behaves exactly as before. The console sends it; see
+    #: `wukong.attachments` for what is accepted.
+    attachments: list[ImageIn] = Field(default_factory=list)
 
 
 class SkillPromotion(BaseModel):
@@ -344,6 +368,25 @@ def create_app(
             "entries": entries[:500],
         }
 
+    @app.get("/api/v1/tasks/{task_id}/attachments/{name}")
+    async def read_attachment(task_id: str, name: str) -> Response:
+        """The bytes of an image the task was given.
+
+        Read-only and name-pinned. The name is a hex prefix plus an extension
+        chosen by the server, so there is no traversal to defend against
+        beyond refusing anything that is not exactly one of this task's
+        files -- and the content type is the one recorded at attach time,
+        not one guessed from the name.
+        """
+        state = _state_of(svc, task_id)
+        for ref in getattr(state, "images", []):
+            if Path(ref.path).name == name:
+                path = Path(ref.path)
+                if not path.is_file():
+                    raise HTTPException(status_code=404, detail="附件文件已不在磁盘上")
+                return Response(content=path.read_bytes(), media_type=ref.media_type)
+        raise HTTPException(status_code=404, detail=f"任务 {task_id} 没有这个附件")
+
     @app.get("/api/v1/files/content")
     async def read_file(path: str) -> dict[str, Any]:
         """A text file from the workspace, for the console's preview pane.
@@ -472,6 +515,15 @@ def create_app(
         )
         effects = _grantable(payload.approve)
         task_id = new_id("task")
+        # Saved before the run, and refused loudly if anything is wrong with
+        # them: a 400 here is a fixable client mistake, while a task that
+        # starts and then fails on its first model call is not.
+        try:
+            images = save_attachments(
+                svc.settings.home, task_id, [i.model_dump() for i in payload.images]
+            )
+        except AttachmentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         svc.track(
             task_id,
             agent.runtime.run(
@@ -481,9 +533,15 @@ def create_app(
                 approved_effects=effects,
                 max_steps=payload.max_steps,
                 task_id=task_id,
+                images=images,
             ),
         )
-        return {"id": task_id, "session_id": session_id, "status": "pending"}
+        return {
+            "id": task_id,
+            "session_id": session_id,
+            "status": "pending",
+            "images": len(images),
+        }
 
     @app.post("/api/v1/tasks/{task_id}/wait")
     async def wait_task(task_id: str, timeout_s: float = 120.0) -> dict[str, Any]:
@@ -567,10 +625,7 @@ def create_app(
         approval, the identity check refuses the write -- this endpoint is a
         view, not a promise.
         """
-        task = svc.a.store.get_task(task_id)
-        if task is None:
-            raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
-        state = replay(svc.a.store.events(task_id), task_id=task_id, session_id=task["session_id"])
+        state = _state_of(svc, task_id)
         pending = state.pending_confirmation
         if pending is None:
             raise HTTPException(status_code=409, detail=f"任务 {task_id} 没有待处理的审批")
@@ -972,7 +1027,7 @@ def _task_view(svc: Service, task_id: str) -> dict[str, Any]:
     task = svc.a.store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
-    state = replay(svc.a.store.events(task_id), task_id=task_id, session_id=task["session_id"])
+    state = _state_of(svc, task_id)
     return {
         "id": task_id,
         "session_id": task["session_id"],
@@ -1005,6 +1060,18 @@ def _task_view(svc: Service, task_id: str) -> dict[str, Any]:
         # tokens across steps while its prompt sits comfortably at 20k.
         "context": _context(state, svc, task_id),
         "plan_approved": state.plan_approved,
+        # Metadata only -- the bytes are served by the attachment route, so
+        # a task list does not carry five screenshots in every row.
+        "images": [
+            {
+                "name": ref.name,
+                "media_type": ref.media_type,
+                "bytes": ref.bytes,
+                "sha256": ref.sha256,
+                "url": f"/api/v1/tasks/{task_id}/attachments/{Path(ref.path).name}",
+            }
+            for ref in getattr(state, "images", [])
+        ],
         # The last check, so a client can say "finished, but the tests are
         # still red" instead of only "finished".
         "verify": state.last_verify,
@@ -1034,6 +1101,21 @@ def _context(state: Any, svc: Service, task_id: str) -> dict[str, Any]:
         "limit": limit,
         "ratio": round(used / limit, 4) if limit else 0.0,
     }
+
+
+def _state_of(svc: Service, task_id: str):
+    """The task's state, from its events, or a 404.
+
+    Every route that answers a question about a task needs this, and the two
+    that existed had each written the same line. A third one (attachments)
+    was about to write it a fourth time.
+    """
+    task = svc.a.store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"未知任务 {task_id}")
+    return replay(
+        svc.a.store.events(task_id), task_id=task_id, session_id=task["session_id"]
+    )
 
 
 def _require_pending(svc: Service, task_id: str) -> None:
@@ -1201,6 +1283,19 @@ async def _agui_stream(svc: Service, payload: AgUiRunInput) -> AsyncIterator[str
         model_alias=payload.model or svc.settings.default_model,
     )
     task_id = new_id("task")
+    # Before the run, as with the REST route: a refused attachment is a 400
+    # the client can act on, while a task that fails on its first model call
+    # looks like a broken endpoint.
+    try:
+        images = save_attachments(
+            svc.settings.home, task_id, [i.model_dump() for i in payload.attachments]
+        )
+    except AttachmentError as exc:
+        # A stream that has already started cannot become a 400, so the
+        # refusal is the first event on it -- which the console renders the
+        # same way it renders any run error.
+        yield agui.sse(agui.run_error(str(exc), code="bad_attachment"))
+        return
     launch = agent.runtime.run(
         goal,
         session_id=session_id,
@@ -1210,6 +1305,7 @@ async def _agui_stream(svc: Service, payload: AgUiRunInput) -> AsyncIterator[str
         plan_approval=payload.plan_approval,
         task_id=task_id,
         prior_context=_prior_context(agent.store, session_id),
+        images=images,
     )
     async for event in _agui_events(
         svc, task_id=task_id, thread_id=thread_id, run_id=run_id,

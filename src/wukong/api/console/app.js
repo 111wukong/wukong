@@ -16,6 +16,7 @@ import * as preview from "./js/preview.js";
 import * as plan from "./js/plan.js";
 import * as rewind from "./js/rewind.js";
 import * as palette from "./js/palette.js";
+import * as attachUi from "./js/attach.js";
 import { money, tokens } from "./js/format.js";
 
 /* Effects the UI may grant. SYSTEM_ADMIN is absent on purpose: the server
@@ -67,7 +68,14 @@ async function send(goal) {
   $("btn-cancel").disabled = false;
   $("empty")?.classList.add("hidden");
 
-  transcript.addTurn("user", "你").append(el("div", "body", goal));
+  const turn = transcript.addTurn("user", "你");
+  turn.append(el("div", "body", goal));
+  // The strip is captured *then* cleared: the thumbnails on the turn are the
+  // same in-memory objects that are about to be posted, so what the user sees
+  // above is literally what was sent.
+  const sent = attachUi.attachments().slice();
+  attachUi.renderAttachments(turn, sent);
+  attachUi.clearAttachments();
   currentRun = transcript.newRun();
   state.run = currentRun;
   runStartedAt = Date.now();
@@ -83,6 +91,7 @@ async function send(goal) {
         model: currentModel() || undefined,
         approve: approvedEffects(),
         plan_approval: planWanted(),
+        attachments: sent,
       }),
     });
     if (!response.ok) throw new Error(`${response.status}: ${(await response.text()).slice(0, 300)}`);
@@ -165,7 +174,13 @@ async function openTask(taskId) {
   state.sessionId = task.session_id;
   setText($("topbar-title"), task.id);
   setText($("topbar-sub"), task.goal || "");
-  if (task.goal) transcript.addTurn("user", "你").append(el("div", "body", task.goal));
+  if (task.goal) {
+    const turn = transcript.addTurn("user", "你");
+    turn.append(el("div", "body", task.goal));
+    // Fetched by the name the server chose, so a deleted attachment is a
+    // broken thumbnail and not a stale copy of someone's screenshot.
+    attachUi.renderAttachments(turn, task.images);
+  }
 
   currentRun = transcript.newRun();
   state.run = currentRun;
@@ -956,6 +971,7 @@ function bindEvents() {
   // The tree is read when it is first opened, not at boot: a workspace with a
   // `node_modules` in it makes the first paint cost a directory walk nobody
   // asked for yet.
+  attachUi.bindAttachments();
   $("files-fold").addEventListener("toggle", () => {
     if ($("files-fold").open && !$("tree").dataset.loaded) {
       sidebar.loadTree().catch(() => {});

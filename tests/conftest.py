@@ -112,6 +112,45 @@ def settings(tmp_path: Path, workspace: Path) -> Settings:
 
 
 @pytest.fixture
+def api(settings, workspace):  # noqa: ANN001
+    """A TestClient whose runtime uses the offline scripted model.
+
+    Imported inside the fixture because fastapi is an extra: a project
+    installed without `.[api]` must still be able to collect the other test
+    modules, which is what a module-level import here would prevent.
+    """
+    pytest.importorskip("fastapi", reason="install with `pip install -e '.[api]'`")
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    from wukong.api.app import Service, create_app
+    from wukong.agent.factory import build_agent
+
+    created: list = []
+
+    def _make(script=None):  # noqa: ANN001
+        model = ScriptedModel(settings.models["scripted"], script)
+        service = Service(settings)
+        # Pre-build the agent with an injected model registry so no API key
+        # is ever needed; the lifespan then leaves it alone.
+        service.agent = asyncio.run(
+            build_agent(settings=settings, models=ScriptedModels(model))
+        )
+        created.append(service.agent)
+        # The guard only accepts loopback Host headers, and the test client
+        # sends `testserver`. Declaring it here keeps the allowlist in
+        # production loopback-only rather than widening it for tests.
+        return TestClient(
+            create_app(settings, service=service, allowed_hosts=["testserver", "127.0.0.1"])
+        )
+
+    yield _make
+    for agent in created:
+        agent.close()
+
+
+@pytest.fixture
 def scripted(settings: Settings):
     """Factory: make_agent(script) -> (agent, model)."""
 

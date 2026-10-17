@@ -7,7 +7,6 @@ consume it.
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pytest
@@ -17,9 +16,6 @@ pytest.importorskip("fastapi", reason="install with `pip install -e '.[api]'`")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from wukong.api.app import Service, create_app  # noqa: E402
-from wukong.agent.factory import build_agent  # noqa: E402
-
-from tests.conftest import ScriptedModel, ScriptedModels  # noqa: E402
 
 
 def parse_sse(text: str) -> list[dict]:
@@ -36,32 +32,6 @@ def parse_sse(text: str) -> list[dict]:
 
 def types_of(events: list[dict]) -> list[str]:
     return [e["type"] for e in events]
-
-
-@pytest.fixture
-def api(settings, workspace):  # noqa: ANN001
-    """A TestClient whose runtime uses the offline scripted model."""
-    created: list = []
-
-    def _make(script=None):  # noqa: ANN001
-        model = ScriptedModel(settings.models["scripted"], script)
-        service = Service(settings)
-        # Pre-build the agent with an injected model registry so no API key
-        # is ever needed; the lifespan then leaves it alone.
-        service.agent = asyncio.run(
-            build_agent(settings=settings, models=ScriptedModels(model))
-        )
-        created.append(service.agent)
-        # The guard only accepts loopback Host headers, and the test client
-        # sends `testserver`. Declaring it here keeps the allowlist in
-        # production loopback-only rather than widening it for tests.
-        return TestClient(
-            create_app(settings, service=service, allowed_hosts=["testserver", "127.0.0.1"])
-        )
-
-    yield _make
-    for agent in created:
-        agent.close()
 
 
 # ---------------------------------------------------------------------------

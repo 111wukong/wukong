@@ -14,6 +14,7 @@ So the interface carries a capability matrix, and the runtime consults it:
                                   "JSON object + repair loop"
 * `max_context_tokens`         -> the context builder's budget
 * `prompt_cache`               -> whether to bother marking stable prefixes
+* `vision`                     -> whether an attached image may be sent
 """
 
 from __future__ import annotations
@@ -35,13 +36,23 @@ class ModelCapabilities(BaseModel):
     """What a provider can do, before user overrides.
 
     Every field here is read by something. That is a rule, not an
-    observation: `vision` used to sit in this list and nothing consulted it,
-    which made it a capability flag that could only mislead -- the runtime
-    cannot put an image in a message, so a model marked vision-capable still
-    could not be asked to look at one. It comes back with the feature.
+    observation: `vision` sat in this list once while nothing consulted it,
+    which made it a flag that could only mislead -- the runtime could not put
+    an image in a message, so a model marked vision-capable still could not
+    be asked to look at one. It is back now that it can.
     """
 
     native_tool_calling: bool = True
+    #: Whether this model can be sent an image. Consulted at task start: an
+    #: attachment and a text-only model is a mistake the user can fix in
+    #: settings, and it is much cheaper to say so before the first token than
+    #: to let the provider refuse it mid-run.
+    #:
+    #: Off by default, including for OpenAI-compatible aliases, because
+    #: whether a given endpoint serves a vision model is a property of the
+    #: *model*, not of the API shape. A user who knows their alias is
+    #: multimodal sets it once: `capabilities.vision = true`.
+    vision: bool = False
     #: Whether the provider accepts a request-side flag asking it to emit
     #: several tool calls in one turn. Adapters whose API has no such flag
     #: (Anthropic) simply do not read it; the runtime handles multiple calls

@@ -157,7 +157,8 @@
     </div>
 
     <form id="composer" autocomplete="off">
-      <div class="composer-box">
+      <div class="composer-box" id="composer-box">
+        <div id="attach-strip" class="attach-strip" hidden></div>
         <textarea id="goal" rows="1" placeholder="描述一个任务，或输入 / 使用命令…" aria-label="任务目标" spellcheck="false"></textarea>
         <div class="composer-row">
           <div class="composer-left">
@@ -179,7 +180,7 @@
             <span id="status" class="status" data-state="idle">空闲</span>
           </div>
           <div class="composer-right">
-            <span class="composer-hint"><kbd>Enter</kbd> 发送 · <kbd>⇧Enter</kbd> 换行</span>
+            <span class="composer-hint"><kbd>Enter</kbd> 发送 · <kbd>⇧Enter</kbd> 换行 · 粘贴图片可附加</span>
             <button id="btn-cancel" type="button" class="btn btn-ghost" disabled>停止</button>
             <button id="btn-send" type="submit" class="btn btn-primary">
               <span>发送</span>

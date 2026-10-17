@@ -48,7 +48,9 @@ class MockModel(ChatModel):
             json_schema=True,
             json_object=True,
             streaming=False,
-            vision=False,
+            # The demo attaches an image and the mock has to be allowed to
+            # receive it, or the attach path cannot be exercised offline.
+            vision=True,
             prompt_cache=False,
             max_context_tokens=200_000,
             max_output_tokens=4_096,
@@ -188,15 +190,22 @@ class MockModel(ChatModel):
         calls = _called_tools(messages)
         goal = _goal(messages)
         log_text = ""
+        images = 0
         for msg in messages:
             if msg.role == "user" and _LOG_CALL_RE.search(msg.content or ""):
                 log_text = msg.content
+            images += len(msg.images)
         lines = [
             f"[mock model] goal: {goal}",
             "",
             f"Executed {len(calls)} tool call(s): "
             + (", ".join(calls) if calls else "(none — no matching heuristic)"),
         ]
+        if images:
+            # Said out loud rather than merely tolerated: an attachment that
+            # reaches the model is the fact worth asserting in a test, and a
+            # silent mock would make a dropped image look like a working one.
+            lines.append(f"Attached images received: {images}")
         if log_text:
             excerpt = "\n".join(log_text.strip().splitlines()[-14:])
             lines += ["", "Most recent progress:", "```", excerpt, "```"]

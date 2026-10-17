@@ -442,19 +442,36 @@ class TestSkillLoadedEvent:
 class TestCapabilityMatrix:
     """Every field in `ModelCapabilities` is read by something.
 
-    `vision` used to sit in that list with no reader. A capability flag
-    nothing consults can only mislead: the runtime cannot put an image in a
-    message, so a model marked vision-capable still cannot be asked to look
-    at one.
+    `vision` used to sit in that list with no reader, and was removed for
+    it: a capability flag nothing consults can only mislead. It is back now
+    that it has one -- the runtime can put an image in a message, and
+    `require_vision` is what decides whether it may. A flag that comes back
+    must come back with its reader, or the same lie is told again.
     """
 
-    def test_vision_was_removed_rather_than_left_dangling(self, settings) -> None:  # noqa: ANN001
+    def test_vision_has_a_reader(self) -> None:
+        from wukong.agent.context import require_vision
         from wukong.models.base import ModelCapabilities
+        from wukong.types import ImageRef
 
-        assert "vision" not in ModelCapabilities.model_fields
-        caps = ModelCapabilities()
-        with pytest.raises(ValueError, match="unknown capability overrides"):
-            caps.merged({"vision": True})
+        assert "vision" in ModelCapabilities.model_fields
+        assert ModelCapabilities().vision is False, "opt-in, not assumed"
+
+        class _Model:
+            def __init__(self, vision: bool) -> None:
+                self.capabilities = ModelCapabilities(vision=vision)
+                self.model_name = "m"
+
+        ref = ImageRef(path="/tmp/wk-img-test.png")
+
+        class _State:
+            images = [ref]
+
+        # The reader is what makes the flag honest: it refuses rather than
+        # sends an image to a model that will 400 on it.
+        require_vision(_Model(True), _State())
+        with pytest.raises(ValueError, match="vision-capable"):
+            require_vision(_Model(False), _State())
 
     def test_the_output_ceiling_clamps_the_request(self) -> None:
         """`ModelSpec.max_output_tokens` is the budget; the capability is

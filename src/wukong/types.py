@@ -6,9 +6,11 @@ all import from here without cycles.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -87,6 +89,44 @@ class ToolResult(BaseModel):
         return body
 
 
+class ImageRef(BaseModel):
+    """An image the user attached to a task.
+
+    The bytes stay on disk. The event log, every replay and every snapshot
+    carry this reference instead: a base64 blob in the log would be re-read
+    on every resume and copied into every state reconstruction, and the image
+    itself is an artifact like any other -- it belongs in the attachments
+    directory, with the same lifetime as the task that referenced it.
+
+    `sha256` is not decoration. It is what makes "the file was replaced
+    underneath us" detectable, and it is what the demo asserts against when
+    proving that a rejected hunk never existed.
+    """
+
+    path: str
+    media_type: str = "image/png"
+    name: str = ""
+    sha256: str = ""
+    bytes: int = 0
+
+    _b64_cache: str | None = None
+
+    def read_b64(self) -> str:
+        """Base64 of the file, read once per ref.
+
+        The ref lives on `AgentState.images` for the whole run, so this is a
+        single read per request rather than one per message.
+        """
+        if self._b64_cache is None:
+            self._b64_cache = base64.b64encode(
+                Path(self.path).read_bytes()
+            ).decode("ascii")
+        return self._b64_cache
+
+    def data_url(self) -> str:
+        return f"data:{self.media_type};base64,{self.read_b64()}"
+
+
 class Message(BaseModel):
     """Provider-neutral chat message.
 
@@ -99,6 +139,10 @@ class Message(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
+    #: Images attached to this message, if any. Only a *user* message can
+    #: carry them: an attachment is something the human brought, and the
+    #: runtime never generates one.
+    images: list[ImageRef] = Field(default_factory=list)
     # Bookkeeping for context budgeting; never sent to the provider.
     pinned: bool = False
     tokens: int | None = None
@@ -121,6 +165,17 @@ class Message(BaseModel):
             out["tool_call_id"] = self.tool_call_id
             if self.name:
                 out["name"] = self.name
+            return out
+        if self.images and self.role == "user":
+            # OpenAI's multimodal shape: a text part first, then one image
+            # part per attachment. Sent as a data URL rather than a hosted
+            # URL because there is no host -- the file is on this machine.
+            parts: list[dict[str, Any]] = [{"type": "text", "text": self.content}]
+            parts.extend(
+                {"type": "image_url", "image_url": {"url": ref.data_url()}}
+                for ref in self.images
+            )
+            out["content"] = parts
             return out
         out["content"] = self.content
         return out

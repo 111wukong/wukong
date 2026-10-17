@@ -38,6 +38,25 @@ from wukong.observability.events import EventType
 from wukong.types import Message
 
 
+def require_vision(model: Any, state: Any) -> None:
+    """Refuse to run a task whose attachment the model cannot receive.
+
+    The alternative is a provider 400 in the middle of the run, which reads
+    as "the endpoint is broken" rather than "this model is text-only". The
+    fix is one line in settings, so the error says which line.
+    """
+    if not getattr(state, "images", None):
+        return
+    if getattr(model.capabilities, "vision", False):
+        return
+    raise ValueError(
+        f"{len(state.images)} image(s) attached, but model "
+        f"'{getattr(model, 'model_name', '?')}' is not marked vision-capable. "
+        "Set capabilities.vision = true for this alias in settings if it "
+        "can see images: [[models.<alias>.capabilities]] vision = true"
+    )
+
+
 class ContextBuilder:
     def __init__(
         self,
@@ -112,7 +131,17 @@ class ContextBuilder:
             messages.append(
                 Message(role="system", content="\n\n".join(state_block_parts), pinned=True)
             )
-        messages.append(Message(role="user", content=f"# Goal\n\n{state.goal}", pinned=True))
+        messages.append(
+            Message(
+                role="user",
+                content=f"# Goal\n\n{state.goal}",
+                pinned=True,
+                # The attachment rides with the goal, not with a later turn:
+                # it was given at the start, and a model asked about it three
+                # steps later has usually lost the thread of what it shows.
+                images=list(state.images),
+            )
+        )
 
         fixed = self.model.count_messages(messages)
         remaining = max(1_000, budget - fixed - 600)

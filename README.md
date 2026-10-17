@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/111wukong/wukong/actions/workflows/ci.yml/badge.svg)](https://github.com/111wukong/wukong/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/111wukong/wukong)
-[![tests](https://img.shields.io/badge/tests-976%20offline-brightgreen)](https://github.com/111wukong/wukong)
+[![tests](https://img.shields.io/badge/tests-1000%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **本地优先的 AI Agent 运行时。它只有一条核心主张：不在没有证据的情况下说「做完了」。**
@@ -94,6 +94,7 @@ export DEEPSEEK_API_KEY=sk-...
 ```bash
 wukong run --plan "重构认证模块"              # 先出计划，等批准
 wukong run --multi-agent "对比这五个模块"     # 显式开启子 Agent 扇出
+wukong run --image ui.png "这个界面哪里不对"  # 附带一张图片
 wukong task rewind <task_id>                 # 预览：还原这个任务改过的文件
 wukong task rewind <task_id> --apply         # 真的还原
 wukong a2a card                              # 会发布的 Agent Card
@@ -136,7 +137,7 @@ CrewAI 的强项是角色化的人体工学，LangGraph 的强项是有类型的
 | 崩溃后恢复在途调用 | — | — | — | 部分 | **写前台账** |
 | 本地零服务依赖 | 否 | 否（VS Code 扩展） | 是 | 是 | 是 |
 | 编辑器内联 diff | **是** | **是** | 否 | 部分 | **否，这是短板** |
-| 图片输入 | **是** | **是** | 否 | **是** | 否 |
+| 图片输入 | **是** | **是** | 否 | **是** | **是** |
 
 Aider 的验证比我们更细（每次编辑后都跑），Cursor / Cline 的内联 diff 比我们的侧栏审查更顺手。这个项目的赌注不在编辑器里，而在**运行时**：当 agent 跑在别人的机器上、跑在 CI 里、跑在你关掉窗口之后，前三个闸门才是唯一能兜住它的东西。
 
@@ -423,6 +424,10 @@ curl -N -X POST http://127.0.0.1:8000/agui \
 **证据按类型渲染。** diff 上色带双行号、命令是终端、读文件是文件；工具行里的文件路径点一下直接打开预览。语法高亮是自己写的 80 行，不引依赖 —— 一个需要 npm 的控制台就不叫零构建了。
 
 **键盘优先。** `⌘K` 命令面板（含「还原这次任务改过的文件」）、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
+
+**图片可以直接贴。** 输入框里 `⌘V` 粘贴、或者把文件拖进去，缩略图带名字和大小出现在文本框上方，随任务一起发出。字节不经过事件日志：它们落在 `~/.wukong/attachments/<任务>/`，日志里只记「在哪、多大、sha256」——所以恢复、重放、崩溃都不会把五张截图复制进数据库。刷新页面后旧任务的缩略图仍然显示，因为它们是从任务自己的附件目录取的，不是浏览器缓存。
+
+`wukong run --image shot.png "这张图里是什么"` 在命令行做同一件事。
 
 状态栏常驻**上下文占比**（最近一次 prompt 的 token / 窗口大小）。它和「花了多少 token」是两个问题：一次运行可能累计花了 40 万 token，而当前 prompt 只占 2 万 —— 前者回答不了「下一步还塞不塞得下」。
 
@@ -838,7 +843,7 @@ A2A **两个方向都默认关闭**：发布一个接受别的 Agent 派活儿�
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest -q                       # 976 条，全部离线，不需要 API key
+.venv/bin/python -m pytest -q                       # 1000 条，全部离线，不需要 API key
 .venv/bin/python -m pytest tests/test_resume_semantics.py -v
 .venv/bin/ruff check src tests
 ```

@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from wukong.agent.repetition import call_signature
 from wukong.observability.events import EventType
-from wukong.types import TokenUsage
+from wukong.types import ImageRef, TokenUsage
 
 
 class TaskStatus(str, Enum):
@@ -225,6 +225,10 @@ class AgentState(BaseModel):
     #: not a log -- and an unbounded list folded from events would grow with
     #: every write of a long run.
     recent_writes: list[str] = Field(default_factory=list)
+    #: Images the user attached to this task. References, never bytes: the
+    #: files live under the home directory and outlive any single replay, so
+    #: the event log carries where they are rather than what they contain.
+    images: list[ImageRef] = Field(default_factory=list)
     pending_confirmation: PendingConfirmation | None = None
     # A call the user approved (or refused) while the task was paused. Kept
     # separately from `pending_confirmation` so that resume() can execute the
@@ -362,6 +366,11 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
             # gate is a property of the run, and a resume must not silently
             # drop it just because the process was started without the flag.
             state.require_plan_approval = bool(budgets.get("require_plan_approval"))
+            # Attachments ride in the same payload, for the same reason: a
+            # resume rebuilds state from events alone, and an attachment the
+            # resume could not see would silently drop out of the prompt the
+            # model was originally asked to look at.
+            state.images = [ImageRef(**i) for i in budgets.get("images") or []]
             state.status = TaskStatus.PENDING
 
         elif kind is EventType.PLAN_CREATED:
