@@ -266,6 +266,8 @@ wukong config show
 
 ## 架构
 
+每个部件为什么是现在这个形状，写在 [`docs/architecture.md`](docs/architecture.md)：事件溯源为什么买崩溃恢复、写前台账为什么能逐块审查、上下文预算为什么分两个阈值、三个闸门各自挡什么、以及它不做什么。
+
 ```
 CLI (typer + rich)
   └── AgentRuntime                     状态机 + 预算硬限 + 中断恢复
@@ -832,7 +834,7 @@ Agent 必须读代码、读配置、读工具链；读也锁死它就废了。�
 | Phase 4 | ✅ YAML 工作流、✅ 多 Agent（orchestrator-worker）、✅ A2A v1.0（Card + JSON-RPC + SSE） |
 | Phase 5 | ✅ Web 控制台（零构建）、⛔ TypeScript SDK（无消费者，纯负担）、⛔ 渠道适配器（见下一节的理由） |
 
-调研与采纳决策见 [`docs/phase2-5-research.md`](docs/phase2-5-research.md)。
+调研与采纳决策见 [`docs/phase2-5-research.md`](docs/phase2-5-research.md)，竞品交互分析见 [`docs/research-agent-ux-2026.md`](docs/research-agent-ux-2026.md)，建成的架构见 [`docs/architecture.md`](docs/architecture.md)。
 
 多 Agent **默认关闭**：token 消耗约 15×，而且调研明确说编程任务不适合它。做成「显式开启 + 预算闸门 + 角色可配」，理由和实测数字见上面的多 Agent 一节。
 
