@@ -231,3 +231,56 @@ class TestConfigSet:
             editor.set("agent.nonsense", "1")
         with pytest.raises(ConfigError, match="unknown setting"):
             editor.set("nonsense", "1")
+
+
+class TestPartialPermissionOverrides:
+    """An unlisted effect keeps its default decision.
+
+    Found by running a real task against DeepSeek: a config that changed only
+    `write_local` produced a decision map with exactly one entry, and the
+    engine then had no decision for `read_only` -- so every `list_directory`
+    demanded approval. A machine whose reads ask for permission is a machine
+    nobody can use, and the config that caused it looked completely correct.
+    """
+
+    def _load(self, tmp_path, body: str):  # noqa: ANN001, ANN202
+        from wukong.config import load_settings
+
+        home = tmp_path / "home"
+        (home).mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text(body, encoding="utf-8")
+        ws = tmp_path / "ws"
+        ws.mkdir(parents=True, exist_ok=True)
+        return load_settings(home=home, workspace=ws)
+
+    def test_changing_one_effect_leaves_the_rest_alone(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.types import Decision, EffectClass
+
+        s = self._load(
+            tmp_path,
+            '[permissions]\nwrite_local = "confirm"\n',
+        )
+        assert s.permissions.defaults[EffectClass.WRITE_LOCAL] == Decision.CONFIRM
+        # The five the user never wrote about.
+        assert s.permissions.defaults[EffectClass.READ_ONLY] == Decision.ALLOW
+        assert s.permissions.defaults[EffectClass.EXECUTE_LOCAL] == Decision.CONFIRM
+        assert s.permissions.defaults[EffectClass.SYSTEM_ADMIN] == Decision.DENY
+        assert len(s.permissions.defaults) == len(EffectClass)
+
+    def test_a_partial_nested_table_also_merges(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.types import Decision, EffectClass
+
+        s = self._load(
+            tmp_path,
+            '[permissions.defaults]\nnetwork = "allow"\n',
+        )
+        assert s.permissions.defaults[EffectClass.NETWORK] == Decision.ALLOW
+        assert s.permissions.defaults[EffectClass.READ_ONLY] == Decision.ALLOW
+        assert len(s.permissions.defaults) == len(EffectClass)
+
+    def test_no_permissions_section_at_all_is_the_builtin_table(self, tmp_path) -> None:  # noqa: ANN001
+        from wukong.types import EffectClass
+
+        s = self._load(tmp_path, "[agent]\nmax_steps = 5\n")
+        assert set(s.permissions.defaults) == set(EffectClass)
+        assert s.permissions.defaults[EffectClass.READ_ONLY].value == "allow"

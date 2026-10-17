@@ -189,7 +189,23 @@ read_only → write_local → execute_local → network → external_side_effect
 
 ---
 
-## 8. 测试策略
+## 8. 用真实模型验证过一次
+
+1000 条测试全是 mock 驱动的，所以有一件事它们证明不了：闸门在真实 token 流下的表现。2026-10-18 用 DeepSeek（`deepseek-chat`）对一个带真实 bug 的项目跑了一次完整链路，结论是可以放心的那类：
+
+```
+计划门停下 → 批准 → 只读调用不再询问 → 写入停下（变更集 +1 −1，就是那一行）
+→ 批准 → 模型自己跑测试（4 passed）→ 校验命令自动通过（exit 0）→ completed
+```
+
+7 步、41423 token、$0.0123。两个细节值得记住：
+
+- **模型选择了 `apply_patch` 而不是 `write_file`**，而逐块审查只对后者开放（`partial: False`，全有或全无）。这是自洽的：一个编辑本来就是意图的单位，而「部分接受一个编辑」没有明确语义。
+- 校验命令指定的解释器路径带空格、命令从未执行时，模型**如实报告了失败**，没有粉饰，也没有试图改掉这条检查。这正是这个闸门存在的目的。
+
+同一次运行抓出两个真 bug，都已修（`config.py` 的部分权限覆盖、`shell.py` 的退出码缺失），见 `tests/test_config_round_trip.py::TestPartialPermissionOverrides` 与 `tests/test_tools.py::TestFailedCommandsCarryAnExitCode`。
+
+## 9. 测试策略
 
 1000 条测试，全部离线，不需要 API key。分三类，各自守不同的东西：
 

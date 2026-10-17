@@ -32,7 +32,18 @@ class ModelError(UAAError):
 
 
 class ToolError(UAAError):
-    """Tool raised while executing. Converted to a failed observation."""
+    """Tool raised while executing. Converted to a failed observation.
+
+    `exit_code` is None for failures that never ran (`MCP server is not
+    running`) and set where the process produced one -- a timeout is 124,
+    matching what `timeout(1)` itself returns. Recording it as None instead
+    is what made a killed command show up in the verify record as
+    "exit None", which reads as "not measured" rather than "killed".
+    """
+
+    def __init__(self, message: str, *, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 class PermissionDenied(UAAError):

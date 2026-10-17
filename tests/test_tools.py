@@ -476,3 +476,31 @@ class TestWritePreviewsShowTheChange:
         assert "nothing would change" in preview
 
 
+
+
+class TestFailedCommandsCarryAnExitCode:
+    """A command that did not run is not a command that was not measured.
+
+    Found by running a real task against DeepSeek: the verify command's
+    interpreter path contained a space, so the command was never executed,
+    and the task's verify record said `exit None`. A reader cannot tell that
+    apart from a command whose exit code was never captured at all -- and a
+    killed command and a missing one are the two failures most worth
+    distinguishing, because one timed out and the other never started.
+    """
+
+    async def test_a_missing_executable_is_127(self, ctx: ToolContext) -> None:
+        result = await RunCommandTool().run(
+            {"command": "definitely-not-a-real-binary-xyz --version"}, ctx
+        )
+        assert result.success is False
+        assert "command not found" in (result.error or "")
+        assert result.metadata["exit_code"] == 127
+
+    async def test_a_timeout_is_124(self, ctx: ToolContext) -> None:
+        result = await RunCommandTool().run(
+            {"command": "sleep 5", "timeout_s": 0.4}, ctx
+        )
+        assert result.success is False
+        assert "timed out" in (result.error or "")
+        assert result.metadata["exit_code"] == 124

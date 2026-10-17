@@ -111,7 +111,8 @@ async def _exec(
         proc.kill()
         await proc.wait()
         raise ToolError(
-            f"command timed out after {timeout_s:.0f}s: {' '.join(argv)}"
+            f"command timed out after {timeout_s:.0f}s: {' '.join(argv)}",
+            exit_code=124,
         ) from None
     elapsed = time.monotonic() - started
     text = stdout.decode("utf-8", errors="replace")
@@ -199,12 +200,25 @@ class RunCommandTool(Tool):
                 max_capture=self.max_output_bytes,
             )
         except ToolError as exc:
-            return ToolResult(success=False, error=str(exc), metadata={"argv": argv})
+            return ToolResult(
+                success=False,
+                error=str(exc),
+                metadata={
+                    "argv": argv,
+                    # Only where the failure actually produced a code: a
+                    # timeout did (124), a missing MCP server did not.
+                    **({"exit_code": exc.exit_code} if exc.exit_code is not None else {}),
+                },
+            )
         except FileNotFoundError as exc:
+            # 127 is what every shell returns for "no such command", and a
+            # missing code here is what a "verify failed" record shows as
+            # `exit None` -- indistinguishable from a command that was never
+            # measured at all.
             return ToolResult(
                 success=False,
                 error=f"command not found: {argv[0]!r} ({exc})",
-                metadata={"argv": argv},
+                metadata={"exit_code": 127, "duration_s": 0.0, "argv": argv},
             )
 
         header = f"$ {command}\n(exit {code}, {elapsed:.2f}s, cwd {cwd})"

@@ -350,17 +350,26 @@ class ConfirmationPolicy(BaseModel):
     denial_limit: int = 3
 
 
+#: The decision every effect falls back to when a config does not mention
+#: it. Built once, here, and used by both the field default and the partial
+#: override in `_hoist_effect_keys` -- two copies of this table is how one of
+#: them drifts.
+BUILTIN_DECISIONS: dict[str, str] = {
+    "read_only": "allow",
+    "write_local": "allow",
+    "execute_local": "confirm",
+    "network": "confirm",
+    "external_side_effect": "confirm",
+    "system_admin": "deny",
+}
+
+
 class PermissionConfig(BaseModel):
     """Per-effect default decision. Matches the spec's table exactly."""
 
     defaults: dict[EffectClass, Decision] = Field(
         default_factory=lambda: {
-            EffectClass.READ_ONLY: Decision.ALLOW,
-            EffectClass.WRITE_LOCAL: Decision.ALLOW,
-            EffectClass.EXECUTE_LOCAL: Decision.CONFIRM,
-            EffectClass.NETWORK: Decision.CONFIRM,
-            EffectClass.EXTERNAL_SIDE_EFFECT: Decision.CONFIRM,
-            EffectClass.SYSTEM_ADMIN: Decision.DENY,
+            EffectClass(key): Decision(value) for key, value in BUILTIN_DECISIONS.items()
         }
     )
     fs: FsPolicy = Field(default_factory=FsPolicy)
@@ -376,6 +385,17 @@ class PermissionConfig(BaseModel):
         Writing the effect names as bare keys is far more readable than a
         nested [permissions.defaults] table, so accept both.
 
+        A partial table **merges**. Seeding from the built-in table rather
+        than from nothing is the whole fix: the old code collected only the
+        keys the user wrote and assigned the result to `defaults`, so a
+        config that said `write_local = "confirm"` produced a map containing
+        exactly one entry. The five effects the user never mentioned then had
+        no decision at all -- which the engine reads as "nothing recorded" and
+        asks about. Found by running a real task against DeepSeek: every
+        `list_directory` demanded approval, because a machine whose reads ask
+        for permission is a machine nobody can use. The default map is the
+        fallback, and "unlisted" must mean "the default", not "nothing".
+
         Only a *string* is treated as a decision. `network` is both an effect
         class and the name of the `[permissions.network]` policy table, and
         popping it unconditionally moved a network allowlist into the
@@ -386,7 +406,8 @@ class PermissionConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         data = dict(data)
-        explicit = dict(data.get("defaults") or {})
+        explicit = dict(BUILTIN_DECISIONS)
+        explicit.update(dict(data.get("defaults") or {}))
         for effect in EffectClass:
             for key in (effect.value, effect.value.replace("_", "")):
                 if key in data and isinstance(data[key], str):
