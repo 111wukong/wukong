@@ -29,7 +29,16 @@ def html() -> str:
 
 @pytest.fixture(scope="module")
 def js() -> str:
-    return (CONSOLE / "app.js").read_text(encoding="utf-8")
+    """Every script the page loads.
+
+    The console is split into ES modules, so scanning only `app.js` would let a
+    renamed id slip through in any of the other files -- which is exactly the
+    failure this test exists to catch, one directory deeper.
+    """
+    parts = [(CONSOLE / "app.js").read_text(encoding="utf-8")]
+    for path in sorted((CONSOLE / "js").glob("*.js")):
+        parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def ids_in(markup: str) -> set[str]:
@@ -192,7 +201,7 @@ class TestInterfaceIsChinese:
 
     def test_the_state_key_is_not_the_label(self, js: str) -> None:
         """The trap this whole class exists for."""
-        assert "node.dataset.state = state;" in js, (
+        assert re.search(r"node\.dataset\.state = (state|key);", js), (
             "setStatus must write the state key, not the display label"
         )
 

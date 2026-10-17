@@ -1,161 +1,297 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-density="comfortable">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>wukong 控制台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%236b8cff'/%3E%3Cg fill='none' stroke='%23081020' stroke-width='1.8' stroke-linecap='round'%3E%3Crect x='5' y='5' width='5' height='5' rx='1.2'/%3E%3Crect x='14' y='5' width='5' height='5' rx='1.2'/%3E%3Crect x='5' y='14' width='5' height='5' rx='1.2'/%3E%3Cpath d='M16.5 14v5M14 16.5h5'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app">
 
+  <!-- ------------------------------------------------------------ sidebar -->
   <aside id="sidebar">
     <header class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-          <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-          <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.6"/>
+          <rect x="14" y="3" width="7" height="7" rx="1.6"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.6"/>
           <path d="M17.5 14v7M14 17.5h7"/>
         </svg>
       </span>
-      <div class="brand-text">
+      <span class="brand-text">
         <span class="brand-name">wukong</span>
         <span class="brand-version" id="version"></span>
-      </div>
+      </span>
+      <button id="btn-palette" class="icon-btn" type="button" title="命令面板（⌘K）" aria-label="命令面板">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M9 4v16M15 4v16M4 9h16M4 15h16"/>
+        </svg>
+      </button>
     </header>
+
+    <div class="sidebar-top">
+      <button id="btn-new" class="new-task" type="button">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        新任务
+        <kbd>⌘K</kbd>
+      </button>
+      <label class="search">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>
+        </svg>
+        <input id="search" type="search" placeholder="搜索会话与任务" autocomplete="off" spellcheck="false" aria-label="搜索会话与任务">
+      </label>
+    </div>
 
     <div class="sidebar-scroll">
       <section class="panel">
-        <h2 class="panel-title">运行</h2>
-      <label class="field">
-        <span class="field-label">模型</span>
-        <input id="model" value="mock" spellcheck="false" autocomplete="off">
-      </label>
-      <div class="field">
-        <span class="field-label">预授权效果</span>
-        <div id="approve" class="toggles" role="group" aria-label="预授权效果"></div>
-        <p class="hint">已授权的效果不再逐次询问。<code>system_admin</code> 无法在此授权。</p>
-      </div>
-    </section>
+        <h2 class="panel-title">会话 <span class="panel-count" id="session-count"></span></h2>
+        <div id="sessions" class="session-list"></div>
+      </section>
 
-    <section class="panel">
-      <details class="fold">
-        <summary class="panel-title">沙箱</summary>
-        <div id="sandbox" class="sandbox">
-          <span class="skeleton"></span>
-        </div>
-      </details>
-    </section>
+      <section class="panel">
+        <h2 class="panel-title">任务 <span class="panel-count" id="task-count"></span></h2>
+        <div id="tasks" class="task-list"></div>
+      </section>
 
-    <section class="panel">
-      <details class="fold" id="skills-fold">
-        <summary class="panel-title">
-          技能
-          <span class="panel-count" id="skill-count"></span>
-        </summary>
-        <div id="skills" class="skill-list"></div>
-      </details>
-    </section>
+      <section class="panel">
+        <details class="fold" id="files-fold">
+          <summary class="panel-title">文件 <span class="panel-count" id="tree-count"></span></summary>
+          <div id="tree" class="tree"></div>
+        </details>
+      </section>
 
-    <section class="panel panel-tree">
-      <h2 class="panel-title">
-        文件
-        <span class="panel-count" id="tree-count"></span>
-      </h2>
-      <div id="tree" class="tree"></div>
-    </section>
+      <section class="panel">
+        <details class="fold" id="skills-fold">
+          <summary class="panel-title">技能 <span class="panel-count" id="skill-count"></span></summary>
+          <div id="skills" class="skill-list"></div>
+        </details>
+      </section>
 
-    <section class="panel panel-grow">
-      <h2 class="panel-title">
-        任务
-        <span class="panel-count" id="task-count"></span>
-      </h2>
-      <div id="tasks" class="task-list"></div>
-    </section>
+      <section class="panel">
+        <details class="fold">
+          <summary class="panel-title">沙箱</summary>
+          <div id="sandbox" class="sandbox"><span class="skeleton"></span></div>
+        </details>
+      </section>
     </div>
 
     <footer class="sidebar-footer">
-      <a href="/docs" target="_blank" rel="noreferrer">接口文档</a>
+      <span class="conn" id="conn" title="事件流连接状态"><i></i><span>本地</span></span>
+      <a href="/docs" target="_blank" rel="noreferrer">接口</a>
       <a href="/api/v1/tools" target="_blank" rel="noreferrer">工具</a>
-      <a href="/api/v1/skills" target="_blank" rel="noreferrer">技能</a>
     </footer>
   </aside>
 
+  <!-- --------------------------------------------------------------- main -->
   <main id="main">
     <header id="topbar">
       <div class="topbar-left">
         <span class="topbar-title" id="topbar-title">控制台</span>
         <span class="chip" id="topbar-status">空闲</span>
+        <span class="topbar-sub" id="topbar-sub"></span>
       </div>
-      <div class="topbar-right" id="topbar-meta"></div>
+      <div class="topbar-right">
+        <span class="budget" id="topbar-meta"></span>
+        <button id="btn-export" class="icon-btn" type="button" title="导出为 Markdown" aria-label="导出">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+          </svg>
+        </button>
+      </div>
     </header>
 
-    <div id="transcript">
+    <div id="activity" class="activity" hidden>
+      <span class="activity-pulse" aria-hidden="true"></span>
+      <span class="activity-text" id="activity-text"></span>
+      <span class="activity-time" id="activity-time"></span>
+      <span class="activity-track"><i id="activity-fill"></i></span>
+    </div>
+
+    <div id="transcript" tabindex="0" role="log" aria-live="polite">
       <div id="empty" class="empty">
-        <div class="empty-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 17V7a2 2 0 0 1 2-2h9l5 5v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/>
-            <path d="M14 5v5h5"/>
-            <path d="M8.5 13.5 11 16l4.5-5"/>
-          </svg>
-        </div>
-        <h2 class="empty-title">让 Agent 做什么？</h2>
-        <p class="empty-body">
-          它会先规划，然后才开始动手。任何写入、执行命令或联网的操作，都会先停下来问你。
-        </p>
-        <div class="empty-examples">
-          <button type="button" class="example">运行测试，找出失败原因并修复</button>
-          <button type="button" class="example">总结这个项目的结构</button>
-          <button type="button" class="example">审查最近的改动有没有问题</button>
+        <div class="empty-inner">
+          <div class="empty-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 17V7a2 2 0 0 1 2-2h9l5 5v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/>
+              <path d="M14 5v5h5"/>
+              <path d="M8.5 13.5 11 16l4.5-5"/>
+            </svg>
+          </div>
+          <h1 class="empty-title">让 Agent 做什么？</h1>
+          <p class="empty-body">
+            它会先规划，再动手。任何写入、执行命令或联网，都会先停下来给你看，改动可以逐块接受。
+          </p>
+          <div class="empty-examples">
+            <button type="button" class="example" data-goal="运行测试，找出失败原因并修复">
+              <span class="example-icon" aria-hidden="true">▹</span>
+              <span class="example-text">
+                <strong>修一个失败的测试</strong>
+                <em>跑测试 · 读堆栈 · 改代码</em>
+              </span>
+            </button>
+            <button type="button" class="example" data-goal="总结这个项目的结构，指出最值得重构的三个模块">
+              <span class="example-icon" aria-hidden="true">▹</span>
+              <span class="example-text">
+                <strong>读懂一个项目</strong>
+                <em>目录 · 依赖 · 设计取舍</em>
+              </span>
+            </button>
+            <button type="button" class="example" data-goal="审查最近的改动有没有问题">
+              <span class="example-icon" aria-hidden="true">▹</span>
+              <span class="example-text">
+                <strong>审查最近的改动</strong>
+                <em>git diff · 风险点 · 建议</em>
+              </span>
+            </button>
+          </div>
+          <p class="empty-hint">按 <kbd>?</kbd> 看快捷键 · <kbd>⌘K</kbd> 打开命令面板 · <kbd>/</kbd> 用命令</p>
         </div>
       </div>
     </div>
 
-    <div id="approval" class="approval hidden" role="alertdialog" aria-labelledby="approval-title">
-      <div class="approval-head">
-        <span class="approval-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <path d="M12 9v4M12 16.5v.01"/>
-            <path d="M10.3 3.9 2.6 17.2A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z"/>
-          </svg>
-        </span>
-        <strong id="approval-title">需要你批准</strong>
-        <span id="approval-effect" class="chip chip-warn"></span>
-      </div>
-      <pre id="approval-preview"></pre>
-      <div id="approval-detail" class="approval-detail"></div>
-      <div class="approval-actions">
-        <button id="btn-approve" class="btn btn-primary">批准</button>
-        <button id="btn-deny" class="btn btn-danger">拒绝</button>
-      </div>
-    </div>
-
-    <form id="composer">
+    <form id="composer" autocomplete="off">
       <div class="composer-box">
-        <textarea id="goal" rows="1" placeholder="描述一个任务…" aria-label="任务目标"></textarea>
-        <div class="composer-actions">
-          <span id="status" class="status" data-state="idle">空闲</span>
-          <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
-          <button id="btn-cancel" type="button" class="btn btn-ghost" disabled>取消</button>
-          <button id="btn-send" type="submit" class="btn btn-primary">发送</button>
+        <textarea id="goal" rows="1" placeholder="描述一个任务，或输入 / 使用命令…" aria-label="任务目标" spellcheck="false"></textarea>
+        <div class="composer-row">
+          <div class="composer-left">
+            <button id="chip-model" class="chip-btn" type="button" title="选择模型">
+              <span class="chip-dot"></span><span id="chip-model-text">mock</span>
+            </button>
+            <button id="chip-perms" class="chip-btn" type="button" title="预授权效果">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"/>
+              </svg>
+              <span id="chip-perms-text">默认权限</span>
+            </button>
+            <span id="status" class="status" data-state="idle">空闲</span>
+          </div>
+          <div class="composer-right">
+            <span class="composer-hint"><kbd>Enter</kbd> 发送 · <kbd>⇧Enter</kbd> 换行</span>
+            <button id="btn-cancel" type="button" class="btn btn-ghost" disabled>停止</button>
+            <button id="btn-send" type="submit" class="btn btn-primary">
+              <span>发送</span>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h13M12 5.5 18.5 12 12 18.5"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
+      <div class="statusline" id="statusline"></div>
     </form>
+
+    <!-- popovers live inside main so they can anchor to the composer -->
+    <div id="perms-pop" class="pop" hidden>
+      <div class="pop-head">预授权效果</div>
+      <div id="approve" class="toggles" role="group" aria-label="预授权效果"></div>
+      <p class="pop-note">已授权的效果不再逐次询问。<code>system_admin</code> 不能在这里授权。</p>
+    </div>
+
+    <div id="model-pop" class="pop pop-model" hidden>
+      <div class="pop-head">模型</div>
+      <div id="model-list" class="model-list"></div>
+      <input id="model-input" class="pop-input" placeholder="或输入自定义别名" spellcheck="false">
+    </div>
   </main>
 
-  <aside id="preview" class="preview" hidden>
+  <!-- ------------------------------------------------------------- review -->
+  <aside id="review" class="review" hidden aria-label="改动审查">
+    <header class="review-head">
+      <div class="review-title-row">
+        <span class="review-title" id="review-title">改动审查</span>
+        <span class="review-stat" id="review-meta"></span>
+      </div>
+      <button id="review-close" class="icon-btn" type="button" aria-label="关闭审查">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div id="review-files" class="review-files"></div>
+    <div id="review-note" class="review-note"></div>
+    <footer class="review-foot">
+      <label class="review-all">
+        <input id="review-all" type="checkbox" checked>
+        <span>全选改动块</span>
+      </label>
+      <div class="review-actions">
+        <button id="review-deny" class="btn btn-ghost" type="button">全部拒绝</button>
+        <button id="review-accept" class="btn btn-primary" type="button">接受所选</button>
+      </div>
+    </footer>
+  </aside>
+
+  <!-- ------------------------------------------------------------ preview -->
+  <aside id="preview" class="preview" hidden aria-label="文件预览">
     <header class="preview-head">
       <span class="preview-path" id="preview-path"></span>
       <span class="preview-meta" id="preview-meta"></span>
       <button id="preview-edit" class="preview-action" type="button">编辑</button>
       <button id="preview-save" class="preview-action primary" type="button" hidden>保存</button>
       <button id="preview-cancel" class="preview-action" type="button" hidden>取消</button>
-      <button id="preview-close" class="preview-close" type="button" aria-label="关闭预览">✕</button>
+      <button id="preview-close" class="icon-btn" type="button" aria-label="关闭预览">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </header>
     <div id="preview-body" class="preview-body"></div>
   </aside>
+
+  <!-- ------------------------------------------------------------ approval -->
+  <div id="approval" class="approval" hidden role="alertdialog" aria-labelledby="approval-title">
+    <div class="approval-head">
+      <span class="approval-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+          <path d="M12 9v4M12 16.5v.01"/>
+          <path d="M10.3 3.9 2.6 17.2A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z"/>
+        </svg>
+      </span>
+      <strong id="approval-title">需要你批准</strong>
+      <span id="approval-effect" class="chip chip-warn"></span>
+      <button class="approval-expand" id="approval-expand" type="button">展开</button>
+    </div>
+    <pre id="approval-preview"></pre>
+    <div id="approval-detail" class="approval-detail"></div>
+    <div class="approval-actions">
+      <button id="btn-approve" class="btn btn-primary" type="button">批准</button>
+      <button id="btn-deny" class="btn btn-danger" type="button">拒绝</button>
+    </div>
+  </div>
+
+  <!-- ------------------------------------------------------------- palette -->
+  <div id="palette" class="palette" hidden>
+    <div class="palette-box" role="dialog" aria-label="命令面板">
+      <div class="palette-input-row">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/>
+        </svg>
+        <input id="palette-input" placeholder="搜索命令 · 输入 @ 找任务" autocomplete="off" spellcheck="false" aria-label="命令面板">
+        <kbd>esc</kbd>
+      </div>
+      <div id="palette-list" class="palette-list" role="listbox"></div>
+      <div class="palette-foot"><kbd>↑</kbd><kbd>↓</kbd> 选择 · <kbd>↵</kbd> 执行</div>
+    </div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- help -->
+  <div id="help" class="help" hidden>
+    <div class="help-box" role="dialog" aria-label="快捷键">
+      <header class="help-head">
+        <strong>快捷键</strong>
+        <button id="help-close" class="icon-btn" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div id="help-body" class="help-body"></div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
 </div>
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

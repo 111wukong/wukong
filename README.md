@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/111wukong/wukong/actions/workflows/ci.yml/badge.svg)](https://github.com/111wukong/wukong/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://github.com/111wukong/wukong)
-[![tests](https://img.shields.io/badge/tests-730%20offline-brightgreen)](https://github.com/111wukong/wukong)
+[![tests](https://img.shields.io/badge/tests-936%20offline-brightgreen)](https://github.com/111wukong/wukong)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 一个本地优先的通用 AI Agent 运行时。Python 3.11+，SQLite，无外部服务依赖。
@@ -331,6 +331,36 @@ CUSTOM (usage / context_compacted / tool_ambiguous …)
 curl -N -X POST http://127.0.0.1:8000/agui \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"分析这个项目"}]}'
+```
+
+---
+
+## 控制台：能力必须看得见
+
+内核比界面领先一代，是这个项目此前最大的浪费 —— 写前台账、六档权限、上下文预算、技能闸门，在命令行里都有，在浏览器里只剩「一个审批框加两个按钮」。
+
+现在的控制台是**零构建的 ES 模块**（`app.js` + `js/*.js`，没有 npm，没有打包器），它补的不是配色，是四件让人敢用的事：
+
+**1. 改动逐块审查，而不是整次批准。** 审批拿到的是 `changeset`（文件 → hunk → 带双行列号的行），每个 hunk 一个复选框。取消勾选的 hunk **不会被写入** —— 服务端用「原文件 + 被接受的 hunk」重建内容再写，所以被拒绝的部分不是被撤销，而是从未存在过。这是写前台账带来的结构性优势，Cursor 的 checkpoint 做不到（它只能先写再回滚）。
+
+```bash
+curl http://127.0.0.1:8000/api/v1/tasks/<id>/review          # 待批准改动的结构
+curl -X POST http://127.0.0.1:8000/api/v1/tasks/<id>/approve \
+  -H 'Content-Type: application/json' -d '{"accept_hunks": ["h0"]}'
+```
+
+只接受 `h0` 时，写入的是 `before + h0`，`h1` 的改动不在文件里。逐块接受是一次 `CONFIRMATION_REVISED` 事件，然后才是 `CONFIRMATION_GRANTED` —— **不是内存里的一次修改**：`resume` 从事件重放状态，只存在进程里的修订会在崩溃后消失，重放时把人类拒绝的 hunk 全部写进去。
+
+**2. 「现在在做什么」是一等公民。** 接了 `STEP_STARTED/FINISHED`，工具行显示耗时，顶部常驻一条 `第 3/7 步 · 12s`。日志只能回答「过去发生了什么」，长任务里真正让人焦虑的是「它是不是卡住了」。
+
+**3. 会话是一级对象。** 侧栏是「会话 → 任务」两级，按今天/昨天/本周分组，一次请求带聚合（任务数、成本、是否有待批准），不是 N+1。刷新页面会回到刚才那个任务 —— 包括停在审批上的那个。
+
+**4. 键盘优先。** `⌘K` 命令面板、`/` 命令（`/new` `/model` `/approve` `/export` `/density`）、`?` 快捷键表、`Esc` 关闭浮层或停止运行、`⌘⇧D` 切换密度。侧栏搜索同时过滤会话与任务。
+
+流式渲染是 O(n)：Markdown 按**空行边界**把已闭合的块解析一次并追加，只有尾部重解析。每收到一个 delta 就全量 `replaceChildren(renderMarkdown(全文))` 是 O(n²)，两千字左右开始掉帧 —— 这不是审美问题，是算术问题。
+
+```bash
+wukong serve          # http://127.0.0.1:8000/
 ```
 
 ---
@@ -739,7 +769,7 @@ A2A **两个方向都默认关闭**：发布一个接受别的 Agent 派活儿�
 ## 开发
 
 ```bash
-.venv/bin/python -m pytest -q                       # 730 条，全部离线，不需要 API key
+.venv/bin/python -m pytest -q                       # 936 条，全部离线，不需要 API key
 .venv/bin/python -m pytest tests/test_resume_semantics.py -v
 .venv/bin/ruff check src tests
 ```
