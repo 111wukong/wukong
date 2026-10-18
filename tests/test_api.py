@@ -165,6 +165,28 @@ class TestRestTasks:
         with client:
             assert client.get("/api/v1/tasks/task_nope").status_code == 404
 
+    def test_the_fan_out_tree_is_exposed(self, api) -> None:
+        """The HTTP surface must agree with `task tree`; a client that only
+        speaks HTTP should not have to re-derive the tree from /tasks."""
+        client = api([{"content": "done"}])
+        with client:
+            task_id = client.post(
+                "/api/v1/tasks", json={"goal": "say done", "model": "scripted"}
+            ).json()["id"]
+            client.post(f"/api/v1/tasks/{task_id}/wait", params={"timeout_s": 30})
+            body = client.get(f"/api/v1/tasks/{task_id}/tree").json()
+
+        assert body["task_id"] == task_id
+        tree = body["tree"]
+        assert tree["id"] == task_id
+        assert tree["status"] == "completed"
+        assert tree["children"] == []
+
+    def test_unknown_task_tree_is_404(self, api) -> None:
+        client = api([])
+        with client:
+            assert client.get("/api/v1/tasks/task_nope/tree").status_code == 404
+
     def test_approve_without_pending_is_409(self, api) -> None:
         client = api([{"content": "done"}])
         with client:

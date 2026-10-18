@@ -650,6 +650,22 @@ def create_app(
             "peer_review": pending.peer_review,
         }
 
+    @app.get("/api/v1/tasks/{task_id}/tree")
+    async def task_tree(task_id: str) -> dict[str, Any]:
+        """The parent→child fan-out rooted at this task, from the projection.
+
+        Read from `tasks.parent_task_id`, not the event log: a tree is a
+        summary, and folding every descendant's events to render one would
+        rebuild state for tasks the caller did not ask about. Same source as
+        `wukong task tree` and `task show`, so the three cannot disagree.
+        """
+        from wukong.task_tree import build_task_tree
+
+        node = build_task_tree(svc.a.store, task_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail=f"unknown task {task_id}")
+        return {"task_id": task_id, "tree": node.as_dict()}
+
     @app.get("/api/v1/tasks/{task_id}/rewind")
     async def rewind_preview(task_id: str, from_seq: int = 0) -> dict[str, Any]:
         """What restoring this task's file changes would do.

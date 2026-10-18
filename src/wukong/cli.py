@@ -846,6 +846,7 @@ def task_show(
     """查看某个任务的计划、日志与工具台账。"""
     settings = _settings(home, None)
     from wukong.agent.state import replay
+    from wukong.task_tree import aggregate, build_task_tree
 
     store = _read_store(settings)
     try:
@@ -856,6 +857,7 @@ def task_show(
         state = replay(store.events(task_id), task_id=task_id, session_id=task["session_id"])
         calls = store.list_tool_calls(task_id)
         artifacts = store.list_artifacts(task_id)
+        tree = build_task_tree(store, task_id)
     finally:
         store.close()
 
@@ -869,6 +871,17 @@ def task_show(
             title=f"task {task_id}",
         )
     )
+    # A task that spawned sub-agents is a fan-out. Without this line,
+    # `task show <root>` reports only the orchestrator's own budget and hides
+    # the workers entirely -- which is the gap `task tree` exists to close.
+    if tree is not None and tree.children:
+        totals = aggregate(tree)
+        console.print(
+            f"[bold]fan-out[/bold]: {len(tree.children)} 个子任务 · 子树合计 "
+            f"{totals.tasks} 个任务 · {totals.steps} 步 · {totals.tokens} tokens · "
+            f"${totals.cost_usd:.4f}"
+        )
+        console.print("[dim]用 `wukong task tree <id>` 看整棵树。[/dim]")
     if state.plan:
         console.print("[bold]plan[/bold]")
         marks = {"pending": " ", "running": "~", "completed": "x", "failed": "!", "skipped": "-"}

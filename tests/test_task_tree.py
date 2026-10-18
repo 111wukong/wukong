@@ -291,3 +291,28 @@ class TestRealFanOut:
             assert totals.tokens > 0
         finally:
             agent.close()
+
+
+class TestTaskShowMentionsFanOut:
+    def test_a_parent_task_points_at_its_tree(self, tmp_path: Path) -> None:
+        """`task show <root>` must not hide the workers it spawned."""
+        from typer.testing import CliRunner
+
+        from wukong.cli import app
+
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "config.toml").write_text("", encoding="utf-8")
+        store = Store(home / "wukong.db")
+        try:
+            root = _leaf(store, goal="survey")
+            _leaf(store, goal="worker", parent=root)
+        finally:
+            store.close()
+
+        result = CliRunner().invoke(app, ["task", "show", root, "--home", str(home)])
+
+        assert result.exit_code == 0, result.output
+        assert "fan-out" in result.output
+        assert "个子任务" in result.output
+        assert "task tree" in result.output
