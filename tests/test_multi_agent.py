@@ -253,7 +253,7 @@ class TestSummary:
         )
         text = summarize([outcome])
 
-        assert "BLOCKED awaiting approval for `write_file`" in text
+        assert "等待对 `write_file` 的确认" in text
         assert "task_child" in text
 
 

@@ -120,7 +120,7 @@ class ToolRunner:
             return entry
         if verdict.needs_confirmation and not ctx.is_approved(tool.spec.effect_class):
             raise ConfirmationRequired(
-                verdict.reason or f"{tool.spec.effect_class.value} requires approval",
+                verdict.reason or f"{tool.spec.effect_class.value} 需要确认",
                 tool=call.name,
                 arguments=args,
                 effect=tool.spec.effect_class.value,

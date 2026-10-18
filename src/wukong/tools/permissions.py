@@ -529,10 +529,9 @@ class PermissionEngine:
             if effect in self.cli_approvals:
                 return Verdict(
                     Decision.CONFIRM,
-                    f"{effect.value} is denied by policy; CLI override downgrades it to "
-                    "a per-call confirmation",
+                    f"{effect.value} 被策略拒绝；命令行覆盖把它降级为每次调用的确认",
                 )
-            return Verdict(Decision.DENY, f"{effect.value} is denied by policy")
+            return Verdict(Decision.DENY, f"{effect.value} 被策略拒绝")
 
         # 4. CLI pre-approval -- unless the fence said this invocation is not
         #    covered by one. `--approve execute_local` means "run commands
@@ -540,12 +539,12 @@ class PermissionEngine:
         #    may run arbitrary code unattended, and a sticky confirmation is
         #    how the two are kept apart.
         if base is Decision.CONFIRM and effect in self.cli_approvals and not fence.sticky:
-            return Verdict(Decision.ALLOW, f"{effect.value} pre-approved on the command line")
+            return Verdict(Decision.ALLOW, f"{effect.value} 已在命令行预批准")
 
         if base is Decision.CONFIRM:
             return Verdict(
                 Decision.CONFIRM,
-                fence.reason or f"{effect.value} needs confirmation",
+                fence.reason or f"{effect.value} 需要确认",
                 sticky=fence.sticky,
             )
         return ALLOW

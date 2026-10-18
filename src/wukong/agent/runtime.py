@@ -141,7 +141,7 @@ def cancel_task(store: Any, settings: Settings, task_id: str) -> str:
     store.append(
         task_id,
         EventType.TASK_CANCELLED,
-        {"reason": f"cancelled while {status.value}"},
+        {"reason": f"在 {status.value} 状态下被取消"},
     )
     # `append` writes the event; it does not touch the `tasks` projection --
     # the loop normally does that itself with `_persist`, and it is not running

@@ -314,8 +314,8 @@ class A2AServer:
                 parts=[
                     TextPart(
                         text=(
-                            f"Approval required for `{pending.tool}` "
-                            f"({pending.effect}). Preview: {pending.preview}"
+                            f"需要批准：`{pending.tool}` "
+                            f"（{pending.effect}）。预览：{pending.preview}"
                         )
                     )
                 ],
@@ -385,8 +385,8 @@ def _status_update(event: Any, *, task_id: str) -> dict[str, Any] | None:
                     {
                         "kind": "text",
                         "text": (
-                            f"Approval required for `{event.payload.get('tool')}` "
-                            f"({event.payload.get('effect')})."
+                            f"需要批准：`{event.payload.get('tool')}` "
+                            f"（{event.payload.get('effect')}）。"
                         ),
                     }
                 ],

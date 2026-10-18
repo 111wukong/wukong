@@ -545,9 +545,8 @@ class WorkflowRunner:
             pending = outcome.pending_confirmation
             effect = pending.effect if pending else "unknown"
             raise RuntimeError(
-                f"needs approval for {effect} (tool {pending.tool if pending else '?'}); "
-                f"add `approve: [{effect}]` to this node or `approvals: [{effect}]` "
-                f"to the workflow"
+                f"{effect} 需要确认（工具 {pending.tool if pending else '?'}）；"
+                f"请在该节点加 `approve: [{effect}]`，或在 workflow 加 `approvals: [{effect}]`"
             )
         if outcome.status != "completed":
             raise RuntimeError(f"agent node ended {outcome.status}: {outcome.error or ''}")

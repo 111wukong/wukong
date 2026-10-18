@@ -350,8 +350,8 @@ def summarize(outcomes: list[SubAgentOutcome]) -> str:
             lines.append(f"- full report: {outcome.report_path}")
         if outcome.pending_tool:
             lines.append(
-                f"- BLOCKED awaiting approval for `{outcome.pending_tool}`; the user "
-                f"must approve task {outcome.task_id} before it can continue"
+                f"- 已阻塞，等待对 `{outcome.pending_tool}` 的确认；用户必须先批准任务 "
+                f"{outcome.task_id} 它才能继续"
             )
         if outcome.error and not outcome.summary:
             lines.append(f"- error: {outcome.error}")

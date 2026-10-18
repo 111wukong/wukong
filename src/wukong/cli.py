@@ -154,7 +154,7 @@ def _progress_printer(quiet: bool):
             console.print(f"  [dim]verify[/dim] {mark}")
         elif kind == "confirmation":
             console.print(
-                f"  [yellow]needs approval[/yellow] {escape(str(payload['effect']))}: "
+                f"  [yellow]需要确认[/yellow] {escape(str(payload['effect']))}："
                 f"{escape(str(payload['preview']))}"
             )
         elif kind == "resumed":
@@ -201,7 +201,7 @@ def _print_result(result, *, quiet: bool = False) -> None:
             lines.append(f"effect: [yellow]{escape(pending.effect)}[/yellow]")
         lines.append(f"reason: {escape(pending.reason)}")
         lines.append(f"request: [dim]{pending.request_id}[/dim]")
-        title = "Plan needs approval" if pending.kind == "plan" else "Approval required"
+        title = "计划需要确认" if pending.kind == "plan" else "需要确认"
         console.print()
         console.print(
             Panel(

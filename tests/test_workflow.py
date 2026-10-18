@@ -968,7 +968,7 @@ graph:
         result = asyncio.run(engine.run(workflow))
         assert not result.completed
         error = result.nodes["work"].error
-        assert "needs approval" in error
+        assert "需要确认" in error
         assert "approve:" in error, "the error should say how to fix it"
 
     def test_a_declared_approval_lets_it_through(self, runner) -> None:  # noqa: ANN001
