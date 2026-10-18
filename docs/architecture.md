@@ -230,3 +230,5 @@ read_only → write_local → execute_local → network → external_side_effect
 - **语义测试**（`test_resume_semantics.py`、`test_verify.py`、`test_plan_approval.py`、`test_review.py`、`test_peer_review.py`）断言的是「崩溃/拒绝/收窄/同行审查之后，状态折出来是什么」。它们用脚本化模型驱动真实 runtime，写真实文件。
 - **接口测试**（`test_api.py`、`test_attachments.py`）断言 wire 格式：SSE 事件、`/agui` 载荷、附件路由。
 - **接线测试**（`test_wiring.py`、`test_console_wiring.py`）断言「每个能力位都有读者」「每个 DOM id 都存在」。它们存在的理由很具体：`vision` 曾经是一个没有任何人读的能力标志——这类 bug 单测抓不到，因为没有任何行为可断言。
+
+控制台是纯 ES module，项目没有 JS 测试框架。唯一的真实算术 `subtreeTotals` 放在不碰 DOM 的 `js/tree.js`，由 `tests/test_console_tree.py` **通过 node 执行**：GitHub 的 runner 自带 node，所以 CI 里是真跑；本机没有 node 时 `skipif` 跳过——一个 Python checkout 不该因为缺 JS 工具链而变红。
