@@ -97,6 +97,7 @@ wukong run --multi-agent "对比这五个模块"     # 显式开启子 Agent 扇
 wukong run --image ui.png "这个界面哪里不对"  # 附带一张图片
 wukong task rewind <task_id>                 # 预览：还原这个任务改过的文件
 wukong task rewind <task_id> --apply         # 真的还原
+wukong task tree <task_id>                   # 看多 Agent 扇出：以该任务为根的任务树 + 子树预算
 wukong a2a card                              # 会发布的 Agent Card
 wukong desktop                               # 原生窗口（系统 webview，不是 Electron）
 wukong sandbox                               # 报告进程隔离实际是否生效

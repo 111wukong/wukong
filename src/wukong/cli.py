@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.tree import Tree
 
 from datetime import datetime, timedelta, timezone
 
@@ -912,6 +913,71 @@ def task_events(
         store.close()
     for event in events[-limit:]:
         console.print(f"[dim]{event.seq:>4}[/dim]  {escape(event.summary())}")
+
+
+@task_app.command("tree")
+def task_tree(
+    task_id: str,
+    home: Optional[Path] = typer.Option(None, "--home"),
+    no_budget: bool = typer.Option(
+        False, "--no-budget", help="Hide per-node steps / tokens / cost."
+    ),
+) -> None:
+    """显示以某任务为根的任务树（多 Agent 扇出 / 工作流子树）。
+
+    一个子 Agent 或工作流节点是带 `parent_task_id` 的普通任务。这棵树直接从
+    任务投影重建——状态、步数、token、花费都在投影里——所以不需要重放事件。
+    它补的是架构文档里那句警告的反面：父流不必假装能装下细节，从这里可以
+    看到真实的分叉与每个分支自己的预算。
+    """
+    settings = _settings(home, None)
+    from wukong.task_tree import aggregate, build_task_tree
+
+    store = _read_store(settings)
+    try:
+        root = build_task_tree(store, task_id)
+    finally:
+        store.close()
+
+    if root is None:
+        err_console.print(f"unknown task {task_id}")
+        raise typer.Exit(1)
+
+    show_budget = not no_budget
+
+    def _label(node) -> str:  # noqa: ANN001
+        style = STATUS_STYLE.get(node.status, "white")
+        goal = (node.goal or "").replace("\n", " ")
+        budget = (
+            f"  steps={node.steps_used} tokens={node.tokens} ${node.cost_usd:.4f}"
+            if show_budget
+            else ""
+        )
+        return (
+            f"[{style}][{node.status}][/{style}] "
+            f"{escape(node.id)}  {escape(goal)}{budget}"
+        )
+
+    def _fill(tree: Tree, node) -> None:  # noqa: ANN001
+        for child in node.children:
+            branch = tree.add(_label(child))
+            _fill(branch, child)
+
+    tree = Tree(_label(root))
+    _fill(tree, root)
+    console.print(tree)
+
+    totals = aggregate(root)
+    counts = "  ".join(
+        f"[{STATUS_STYLE.get(s, 'white')}]{s}: {n}[/{STATUS_STYLE.get(s, 'white')}]"
+        for s, n in sorted(totals.by_status.items())
+    )
+    console.print(
+        f"\n[bold]subtree[/bold]: {totals.tasks} tasks  steps={totals.steps}  "
+        f"tokens={totals.tokens}  ${totals.cost_usd:.4f}"
+    )
+    if counts:
+        console.print(counts)
 
 
 @task_app.command("rewind")
