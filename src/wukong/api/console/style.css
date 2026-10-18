@@ -1340,6 +1340,39 @@ kbd {
 }
 .review-note:empty { display: none; }
 
+/* Peer review card: a read-only reviewer sub-agent's verdict on the change. */
+.peer-review {
+  margin-bottom: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft, rgba(80, 130, 255, 0.08));
+  padding: 10px 12px;
+}
+.peer-review.blocked { border-color: var(--danger); background: var(--danger-soft, rgba(230, 70, 70, 0.08)); }
+.peer-review.changes_requested { border-color: var(--warn); background: var(--warn-soft, rgba(220, 170, 40, 0.1)); }
+.peer-review.approve { border-color: var(--ok); background: var(--ok-soft, rgba(60, 190, 110, 0.08)); }
+.peer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.peer-badge {
+  font-size: 11px; font-weight: 600; color: var(--text);
+  background: var(--accent); color: #fff; padding: 1px 8px; border-radius: 999px;
+}
+.peer-review.blocked .peer-badge { background: var(--danger); }
+.peer-review.changes_requested .peer-badge { background: var(--warn); color: #1a1a1a; }
+.peer-review.approve .peer-badge { background: var(--ok); }
+.peer-title { font-weight: 600; font-size: 12.5px; }
+.peer-model { margin-left: auto; font: 500 10.5px/1 var(--mono); color: var(--text-faint); }
+.peer-summary { font-size: 12px; line-height: 1.6; color: var(--text); margin-bottom: 6px; }
+.peer-concerns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.peer-concern { font-size: 11.5px; line-height: 1.5; display: flex; gap: 8px; align-items: baseline; }
+.peer-sev {
+  flex: none; font: 600 10px/1 var(--mono); text-transform: uppercase;
+  padding: 1px 5px; border-radius: 4px; color: #1a1a1a; background: var(--text-faint);
+}
+.peer-concern.sev-high .peer-sev { background: var(--danger); color: #fff; }
+.peer-concern.sev-medium .peer-sev { background: var(--warn); color: #1a1a1a; }
+.peer-concern.sev-low .peer-sev { background: var(--ok); color: #fff; }
+.peer-note { color: var(--text-muted); }
+
 .review-foot {
   flex: none;
   display: flex;

@@ -173,6 +173,10 @@ class PendingConfirmation(BaseModel):
     #: it makes one. `preview` is the same information as a truncated text
     #: diff; this is the shape a reviewer can act on. See `wukong.review`.
     review: dict[str, Any] | None = None
+    #: A read-only reviewer sub-agent's verdict on `review`, attached when peer
+    #: review is enabled. Advisory only -- it never changes what the human can
+    #: decide, so it is safe to carry it on the prompt the human sees.
+    peer_review: dict[str, Any] | None = None
 
 
 class AgentState(BaseModel):
@@ -467,6 +471,7 @@ def replay(events: list, *, task_id: str, session_id: str = "") -> AgentState:
                 preview=payload.get("preview", ""),
                 identity=payload.get("identity") or {},
                 review=payload.get("review"),
+                peer_review=payload.get("peer_review"),
             )
             state.status = TaskStatus.WAITING_CONFIRMATION
 

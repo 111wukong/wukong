@@ -49,6 +49,8 @@ from wukong.observability.bus import EventBus
 from wukong.observability.events import EventType
 from wukong.review import changeset as review_changeset
 from wukong.review import revise as review_revise
+from wukong.peer_review import PeerReviewVerdict, review_changeset as peer_review_changeset
+from wukong.orchestration.multi_agent import AgentDeps
 from wukong.tools.base import ToolContext
 from wukong.tools.permissions import PermissionEngine, scrub_env
 from wukong.tools.registry import ToolRegistry
@@ -699,7 +701,7 @@ class AgentRuntime:
             try:
                 finished = await self._run_tool_calls(resp.tool_calls, state)
             except ConfirmationRequired as need:
-                return self._pause_for_confirmation(state, need, started)
+                return await self._pause_for_confirmation(state, need, started)
             self._persist(state)
             if finished is not None:
                 return finished
@@ -1197,7 +1199,7 @@ class AgentRuntime:
             "cover this. Ask again if you still want it."
         )
 
-    def _pause_for_confirmation(
+    async def _pause_for_confirmation(
         self, state: AgentState, need: ConfirmationRequired, started: float
     ) -> AgentResult:
         request_id = f"req_{uuid.uuid4().hex[:10]}"
@@ -1218,6 +1220,13 @@ class AgentRuntime:
         # in the same breath as the prompt, and a client that attaches late
         # replays it rather than re-reading files that may have changed since.
         review = review_changeset(need.tool, need.arguments, ctx.workspace)
+
+        # A read-only reviewer sub-agent reads the changeset before the human is
+        # asked. Advisory only: it never changes what the human can decide. It
+        # is skipped unless peer review is on and there is a reviewable change,
+        # so commands and non-changeset confirmations are untouched.
+        peer = await self._peer_review(state, review, session_id=state.session_id)
+
         pending = PendingConfirmation(
             request_id=request_id,
             step_id=state.step_id(),
@@ -1228,6 +1237,7 @@ class AgentRuntime:
             preview=preview,
             identity=identity.as_dict() if identity else {},
             review=review,
+            peer_review=peer,
         )
         state.pending_confirmation = pending
         state.status = TaskStatus.WAITING_CONFIRMATION
@@ -1244,6 +1254,7 @@ class AgentRuntime:
                 "preview": preview,
                 "identity": pending.identity,
                 "review": review,
+                "peer_review": peer,
             },
         )
         self._persist(state)
@@ -1252,6 +1263,53 @@ class AgentRuntime:
             {"preview": preview, "effect": pending.effect, "detail": identity.detail if identity else ""},
         )
         return self._result(state, duration=time.time() - started)
+
+    async def _peer_review(
+        self, state: AgentState, review: dict[str, Any] | None, *, session_id: str
+    ) -> dict[str, Any] | None:
+        """Run a read-only reviewer over `review`, or None when it does not apply.
+
+        Returns None (and never raises) unless peer review is enabled *and* there
+        is a reviewable changeset. On anything that goes wrong the parent task
+        must not stall, so failures degrade to a "review manually" verdict that
+        the human still sees.
+        """
+        if not self.settings.peer_review.enabled:
+            return None
+        if not review or not review.get("reviewable"):
+            return None
+        try:
+            deps = AgentDeps(
+                settings=self.settings,
+                store=self.store,
+                registry=self.registry,
+                engine=self.engine,
+                models=self.models,
+                skills=self.skills,
+                bus=self.bus,
+                memory=self.memory,
+            )
+            verdict = await peer_review_changeset(
+                deps,
+                review,
+                session_id=session_id,
+                parent_task_id=state.task_id,
+                model_alias=self.settings.peer_review.model or None,
+                settings=self.settings,
+            )
+        except Exception as exc:  # peer review must never block a task
+            verdict = PeerReviewVerdict(
+                verdict="changes_requested",
+                concerns=[],
+                summary=f"(peer review error: {exc}; review manually)",
+                parse_error=True,
+            )
+        self.store.append(
+            state.task_id,
+            EventType.PEER_REVIEW_COMPLETED,
+            verdict.as_dict(),
+        )
+        return verdict.as_dict()
 
     def _pause_for_plan(self, state: AgentState, started: float) -> AgentResult:
         """Stop after planning, before the first tool call.

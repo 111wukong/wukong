@@ -647,6 +647,7 @@ def create_app(
             "effect": pending.effect,
             "preview": pending.preview,
             "review": found,
+            "peer_review": pending.peer_review,
         }
 
     @app.get("/api/v1/tasks/{task_id}/rewind")

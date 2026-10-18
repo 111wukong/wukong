@@ -544,6 +544,30 @@ class MultiAgentConfig(BaseModel):
     max_summary_chars: int = 1_200
 
 
+class PeerReviewConfig(BaseModel):
+    """A read-only reviewer sub-agent that reads a pending changeset before
+    the human is asked to approve it.
+
+    Off by default. Advisory only: the verdict never auto-approves or rejects a
+    write -- it is a second pair of (model) eyes on the diff, so a human
+    skimming a five-file change at 2am gets a nudge about what to look at. The
+    human remains the only decision-maker.
+
+    The reviewer is a full `AgentRuntime` run gated by a read-only permission
+    engine: it can read files to check the change in context, and it cannot
+    write or run anything -- so it can never pause waiting for a human and wedge
+    the parent, and it can never mutate shared state.
+    """
+
+    enabled: bool = False
+    # Alias for the reviewer. Empty means "inherit the run's model".
+    model: str = ""
+    # The reviewer is a tiny agent: read the diff, maybe read a file, answer.
+    max_steps_per_agent: int = 8
+    # Cap on concerns so a chatty model cannot bury the human in nitpicks.
+    max_concerns: int = 10
+
+
 class A2AConfig(BaseModel):
     """Agent-to-agent exposure.
 
@@ -640,6 +664,7 @@ class Settings(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
     a2a: A2AConfig = Field(default_factory=A2AConfig)
+    peer_review: PeerReviewConfig = Field(default_factory=PeerReviewConfig)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     skill_dirs: list[str] = Field(default_factory=lambda: ["skills"])
 

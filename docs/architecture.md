@@ -143,6 +143,18 @@ read_only → write_local → execute_local → network → external_side_effect
 
 这条路上踩到过一个真 bug，值得记住：**审批通过的调用在 `resume()` 里执行，不走 `_run_tool_calls`**，所以只在那一条路径上记录「刚写过什么」的话，「一个文件、一次审批」这种最常见的运行永远不会被验证。
 
+### 4.4 同行审查：一个只读子 Agent 的咨询意见，不是第四道闸门
+
+闸门的代价是「人要看」。子 Agent 之间互相把关（「互相」）的目的不是省掉这道闸，而是把人的注意力引导到更值得看的地方：在人工审批之前，先让一个**只读**的子 Agent 把待写变更集读一遍，给一句咨询意见。
+
+它从 `review.py` 已经解析好的 `changeset` 出发，渲染成一段人类可读的简报（路径 + 每块的增减标记），交给一个全新的 `AgentRuntime`。这个审阅者的权限引擎是**只许读、其余一律拒绝**（`peer_review.py` 的 `_reviewer_engine`）：它因此永远不会自己停下（`confirm` 只属于写/执行的决定）、永远不会写共享状态、也不会在父任务里递归——它就是一个跑完即焚的建议生成器，天然卡不死父任务。
+
+审阅者必须回一段带 `[verdict]` / `[concerns]` / `[summary]` 的结构化文本。**解析失败时降级为 `changes_requested`（fail open 朝向人类注意），绝不静默放行**：缺 `[verdict]`、措辞不认识、审阅者没跑完，结果都是「建议人再看一眼」，而不是「看起来没问题」。三种结论是 `approve` / `changes_requested` / `blocked`，并且**只是建议**——它不增减人类的批准/拒绝权力，人类照样可以无视。
+
+它尊重逐块审查的 `reviewable` 标记：纯命令确认、非变更集确认不经过它。结果通过 `PEER_REVIEW_COMPLETED` 事件落库（只带 verdict 字典，不含审阅者的完整对话），并挂在 `PendingConfirmation.peer_review` 上随确认容器一起走到 AG-UI 协议和 `/api/v1/tasks/{id}/review`，由控制台渲染成一张咨询卡片。
+
+默认关闭（`peer_review.enabled = False`）。开着时只多一次只读模型调用，不碰写权限、不影响现有三道闸。
+
 ---
 
 ## 5. 周边：技能、多 Agent、工作流、互操作
@@ -181,6 +193,7 @@ read_only → write_local → execute_local → network → external_side_effect
 | `api/` | REST + AG-UI + WebSocket + 控制台静态资源 | `app.py` |
 | `models/` | provider 适配（OpenAI 兼容 / Anthropic / mock）与能力矩阵 | `base.py` |
 | `review.py` | changeset 解析与按子集重建 | — |
+| `peer_review.py` | 只读子 Agent 对待写变更集的咨询审查 | `review_changeset` |
 | `attachments.py` | 图片附件的校验与落盘 | — |
 | `skills/` | 技能加载与生命周期 | `registry.py` |
 | `orchestration/` | 多 Agent 与 YAML 工作流 | `runner.py` |
@@ -213,6 +226,6 @@ read_only → write_local → execute_local → network → external_side_effect
 
 1000 条测试，全部离线，不需要 API key。分三类，各自守不同的东西：
 
-- **语义测试**（`test_resume_semantics.py`、`test_verify.py`、`test_plan_approval.py`、`test_review.py`）断言的是「崩溃/拒绝/收窄之后，状态折出来是什么」。它们用脚本化模型驱动真实 runtime，写真实文件。
+- **语义测试**（`test_resume_semantics.py`、`test_verify.py`、`test_plan_approval.py`、`test_review.py`、`test_peer_review.py`）断言的是「崩溃/拒绝/收窄/同行审查之后，状态折出来是什么」。它们用脚本化模型驱动真实 runtime，写真实文件。
 - **接口测试**（`test_api.py`、`test_attachments.py`）断言 wire 格式：SSE 事件、`/agui` 载荷、附件路由。
 - **接线测试**（`test_wiring.py`、`test_console_wiring.py`）断言「每个能力位都有读者」「每个 DOM id 都存在」。它们存在的理由很具体：`vision` 曾经是一个没有任何人读的能力标志——这类 bug 单测抓不到，因为没有任何行为可断言。

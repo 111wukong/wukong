@@ -539,6 +539,7 @@ def interrupt_from_event(event: Event) -> dict[str, Any]:
         "preview": payload.get("preview") or "",
         "detail": payload.get("reason") or "",
         "review": payload.get("review"),
+        "peer_review": payload.get("peer_review"),
         "plan": (payload.get("arguments") or {}).get("steps")
         if payload.get("kind") == "plan"
         else None,

@@ -111,6 +111,12 @@ class EventType(str, Enum):
     SUBAGENT_COMPLETED = "subagent_completed"
     SUBAGENT_FAILED = "subagent_failed"
 
+    # peer review. A read-only reviewer sub-agent reads a pending changeset
+    # before the human is asked to approve it. Advisory only: the verdict never
+    # auto-approves or rejects a write. Recorded on the parent so the review is
+    # visible from one place, exactly like SUBAGENT_*.
+    PEER_REVIEW_COMPLETED = "peer_review_completed"
+
 
 class Event(BaseModel):
     """A durable fact. `seq` is per-task and gapless."""
@@ -141,6 +147,8 @@ class Event(BaseModel):
             return f"{t}: {p.get('kind')} ({p.get('used')}/{p.get('limit')})"
         if self.type == EventType.TOOL_AMBIGUOUS:
             return f"{t}: {p.get('name')} outcome unknown after crash"
+        if self.type == EventType.PEER_REVIEW_COMPLETED:
+            return f"{t}: {p.get('verdict')} (reviewer {p.get('task_id')})"
         return f"{t}: {_short(p)}"
 
 

@@ -67,6 +67,12 @@ function render() {
   const list = $("review-files");
   list.replaceChildren();
 
+  // A read-only reviewer sub-agent may have read this changeset before the
+  // human was asked. Its verdict rides along on the interrupt so the human sees
+  // a second pair of eyes next to the diff, not instead of it.
+  const peer = current?.interrupt?.peer_review;
+  if (peer) list.append(renderPeer(peer));
+
   if (!review || !(review.files || []).length) {
     list.append(
       el("div", "preview-note", review?.reason || "这次调用没有可拆分的文件改动。"),
@@ -233,5 +239,46 @@ export function selectAll(value) {
     box.classList.toggle("rejected", !value);
   }
   updateFooter();
+}
+
+function verdictWord(verdict) {
+  if (verdict === "approve") return "可批准";
+  if (verdict === "blocked") return "建议拦下";
+  return "建议修改";
+}
+
+function severityClass(severity) {
+  const s = (severity || "").toLowerCase();
+  if (s === "high") return "sev-high";
+  if (s === "low") return "sev-low";
+  return "sev-medium";
+}
+
+function renderPeer(peer) {
+  const card = el("div", `peer-review ${peer.verdict || ""}`);
+  const head = el("div", "peer-head");
+  head.append(el("span", "peer-badge", verdictWord(peer.verdict)));
+  head.append(el("span", "peer-title", "子 Agent 互审"));
+  if (peer.model) head.append(el("span", "peer-model", peer.model));
+  card.append(head);
+
+  if (peer.summary) card.append(el("div", "peer-summary", peer.summary));
+
+  const concerns = peer.concerns || [];
+  if (concerns.length) {
+    const ul = el("ul", "peer-concerns");
+    for (const c of concerns) {
+      const li = el("li", `peer-concern ${severityClass(c.severity)}`);
+      if (c.severity) li.append(el("span", "peer-sev", c.severity));
+      li.append(el("span", "peer-note", (c.file ? `${c.file}: ` : "") + (c.note || "")));
+      ul.append(li);
+    }
+    card.append(ul);
+  }
+
+  if (peer.parse_error) {
+    card.append(el("div", "preview-note", "互审结果未能解析，请人工查看原始输出。"));
+  }
+  return card;
 }
 

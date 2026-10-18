@@ -246,10 +246,13 @@ class ModelCapabilities:
 wukong config set agent.max_steps 12
 wukong config set multi_agent.enabled true
 wukong config set permissions.network.max_response_bytes 500000
+wukong config set peer_review.enabled true
 wukong config show
 ```
 
 `wukong config set` 是**读-改-写**：加载整个文件、改一个键、把整份写回去。所以序列化器漏掉一个节不是「少写一行」，而是**把用户的设置从文件里删掉**。
+
+上面的 `peer_review` 是可选的**咨询**层：开启后，在人工审批之前，会先让一个**只读**子 Agent 把待写变更集读一遍并给出 `approve` / `changes_requested` / `blocked` 的建议（默认关闭，只多一次只读模型调用，不增减人类的批准/拒绝权力）。机制细节见 [`docs/architecture.md`](docs/architecture.md) 的 §4.4。
 
 原来的序列化器手写了一个节列表（`models` / `permissions` / `agent`），于是 `[permissions.network]`、`[sandbox]`、`[memory]`、`[multi_agent]` 都会在下次 `config set` 时消失——最尖的一处是手写的网络白名单，它会在有人改一次步数预算时无声蒸发。
 
