@@ -409,7 +409,16 @@ kbd {
   gap: 6px;
   min-width: 0;
 }
-.task-stats { font: 500 10px/1 var(--mono); color: var(--text-faint); }
+.task-stats {
+  font: 500 10px/1 var(--mono);
+  color: var(--text-faint);
+  /* A parent row shows the subtree total, which is longer than the own
+   * budget; keep it on one line and clip rather than wrap the meta row. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-meta .chip { padding: 1px 5px; font-size: 10px; }
 
 .task-empty, .skill-empty, .session-empty {

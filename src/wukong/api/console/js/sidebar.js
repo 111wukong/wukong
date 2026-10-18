@@ -13,7 +13,8 @@
 
 import { json } from "./api.js";
 import { $, el, emit, setClass, setText, state } from "./store.js";
-import { bytes, dayBucket, timeAgo, tokens } from "./format.js";
+import { bytes, dayBucket, money, timeAgo, tokens } from "./format.js";
+import { subtreeTotals } from "./tree.js";
 
 const STATUS_TONE = {
   completed: "chip-ok",
@@ -191,7 +192,7 @@ function renderSessions() {
   }
 }
 
-function paintTask(node, task) {
+function paintTask(node, task, subtree) {
   setText(node.goal, task.goal);
   node.goal.title = task.goal;
   // `orphaned` is computed by the server, not stored: the record says running
@@ -203,8 +204,22 @@ function paintTask(node, task) {
   node.chip.title = task.orphaned
     ? "崩溃遗留：记录说在跑，但没有进程在跑它。用 task resume 可以接着跑。"
     : task.status;
-  const total = (task.tokens_in || 0) + (task.tokens_out || 0);
-  setText(node.stats, `${task.steps_used || 0} 步 · ${tokens(total)}`);
+  // A parent's own budget hides the workers it spawned. When the row has
+  // children in the current view, show the subtree total instead -- the same
+  // number `task tree` reports, so the sidebar and the CLI cannot disagree.
+  const ownTokens = (task.tokens_in || 0) + (task.tokens_out || 0);
+  if (subtree && subtree.tasks > 1) {
+    setText(
+      node.stats,
+      `${subtree.tasks - 1} 子任务 · 合计 ${subtree.steps} 步 · ${tokens(subtree.tokens)}`,
+    );
+    node.stats.title =
+      `子树合计：${subtree.tasks - 1} 个子任务 · ${subtree.steps} 步 · ` +
+      `${subtree.tokens} tokens · ${money(subtree.cost)}`;
+  } else {
+    setText(node.stats, `${task.steps_used || 0} 步 · ${tokens(ownTokens)}`);
+    node.stats.title = "";
+  }
   // The status *key*, not its label: the colour is chosen from this and the
   // text is looked up separately, so a translated label cannot lose the colour.
   node.item.dataset.state = shown;
@@ -233,6 +248,7 @@ function renderTasks() {
   }
 
   const ordered = flatten(rows);
+  const totals = subtreeTotals(rows);
   const ids = ordered.map((entry) => entry.task.id).join();
   if (ids !== [...taskNodes.keys()].join()) {
     // The *set* changed, so rebuild. Doing this on every poll destroys the
@@ -242,7 +258,7 @@ function renderTasks() {
     list.replaceChildren();
     for (const { task, depth } of ordered) {
       const node = taskNodes.get(task.id) || taskRow(task, depth);
-      paintTask(node, task);
+      paintTask(node, task, totals.get(task.id));
       list.append(node.item);
       next.set(task.id, node);
     }
@@ -251,7 +267,7 @@ function renderTasks() {
   } else {
     for (const { task } of ordered) {
       const node = taskNodes.get(task.id);
-      if (node) paintTask(node, task);
+      if (node) paintTask(node, task, totals.get(task.id));
     }
   }
 }

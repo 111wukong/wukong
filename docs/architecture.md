@@ -161,7 +161,7 @@ read_only → write_local → execute_local → network → external_side_effect
 
 **技能（`skills/`）**：`SKILL.md` 带 frontmatter，元数据清单只进上下文（每个约 100 token），模型显式 `load_skill` 才拿全文——渐进披露，不是把三十个技能全文塞进系统提示。技能有自己的生命周期 `candidate → validated → approved → active → deprecated`，每一级都是人工决定：**agent 不能自己升级自己的技能**，这是写进状态机的闸门，不是提示词里的请求。
 
-**多 Agent（`orchestration/multi_agent.py`）**：`delegate` 工具把子目标派给真实子任务，并发跑、各自有事件流和预算。父任务的流只携带摘要（`SUBAGENT_*` 事件），子任务的细节在子任务自己的 id 下——父流假装能装下细节，就会多出一份更薄、迟早和真相不一致的视图。要看真实的分叉与每个分支自己的预算，用 `wukong task tree <id>`：它从任务投影（而非事件流）重建 parent→child 树，所以不重放事件，也和 `task show` 同源。同一棵树也通过 `GET /api/v1/tasks/{id}/tree` 暴露给 HTTP 客户端，`--json` 与它同形。
+**多 Agent（`orchestration/multi_agent.py`）**：`delegate` 工具把子目标派给真实子任务，并发跑、各自有事件流和预算。父任务的流只携带摘要（`SUBAGENT_*` 事件），子任务的细节在子任务自己的 id 下——父流假装能装下细节，就会多出一份更薄、迟早和真相不一致的视图。要看真实的分叉与每个分支自己的预算，用 `wukong task tree <id>`：它从任务投影（而非事件流）重建 parent→child 树，所以不重放事件，也和 `task show` 同源。同一棵树也通过 `GET /api/v1/tasks/{id}/tree` 暴露给 HTTP 客户端，`--json` 与它同形。控制台侧栏的父任务行直接显示子树合计——用已经取到的行在客户端聚合，不额外请求，所以它和 `task tree` 报的是同一个数。
 
 **工作流（`orchestration/workflow.py`）**：YAML 声明式编排，节点是任务或表达式，加载时校验引用（悬空引用在加载期就炸，而不是跑到第三步）。工作流运行本身也是一个任务。
 
