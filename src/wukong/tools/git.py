@@ -63,7 +63,15 @@ class _GitTool(Tool):
         self.sandbox_mode = sandbox_mode
 
     def _env(self, ctx: ToolContext) -> dict[str, str]:
-        env = scrub_env(ctx.env or None, known_secrets=self.known_secrets)
+        # `GIT_CEILING_DIRECTORIES` is a containment knob: git will not ascend
+        # above it looking for a repository, so a workspace nested inside a
+        # larger checkout cannot accidentally act on the parent repo. It is
+        # not a secret, and forwarding it only *narrows* what git can discover.
+        env = scrub_env(
+            ctx.env or None,
+            known_secrets=self.known_secrets,
+            extra_allow=("GIT_CEILING_DIRECTORIES",),
+        )
         # Keep git non-interactive: a credential prompt would hang the task
         # until the timeout, which looks like a bug rather than an auth issue.
         env.update(

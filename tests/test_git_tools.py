@@ -95,8 +95,10 @@ class TestReadOnlyTools:
 
         Using the `workspace` fixture here is wrong when the test runner's
         temp directory lives inside a checkout: `git status` walks up, finds
-        the project's own `.git`, and succeeds. The test then asserts the
-        opposite of what it is actually exercising.
+        the project's own `.git`, and succeeds. `GIT_CEILING_DIRECTORIES`
+        makes git stop above the temp directory, so the assertion holds
+        whether the runner's TMPDIR is inside a checkout (local sandboxes) or
+        not (CI) -- without depending on where the machine happens to put tmp.
         """
         import tempfile
 
@@ -108,6 +110,7 @@ class TestReadOnlyTools:
             workspace=outside,
             home=tmp_path,
             artifact_dir=tmp_path,
+            env={"GIT_CEILING_DIRECTORIES": str(outside.parent)},
         )
         result = await GitStatusTool().run({}, plain)
         assert not result.success
