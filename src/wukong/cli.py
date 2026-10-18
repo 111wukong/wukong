@@ -801,7 +801,7 @@ def task_list(
         )
         return
     table = Table(show_header=True, header_style="bold")
-    for column in ("id", "status", "steps", "tokens", "cost", "goal"):
+    for column in ("id", "parent", "status", "steps", "tokens", "cost", "goal"):
         table.add_column(column, overflow="fold")
     for row in rows:
         style = STATUS_STYLE.get(row["status"], "white")
@@ -812,8 +812,13 @@ def task_list(
         # perfectly and `resume` finishes the job, but nothing on screen says
         # a resume is available.
         label = "running?" if row["status"] == "running" else row["status"]
+        # A sub-agent or workflow node is an ordinary task with a parent. Mark
+        # it here, or a fan-out's workers read as unrelated top-level tasks.
+        parent = row.get("parent_task_id") or ""
+        parent_cell = f"[dim]↳ {parent}[/dim]" if parent else ""
         table.add_row(
             row["id"],
+            parent_cell,
             f"[{style}]{label}[/{style}]",
             str(row["steps_used"]),
             str(row["tokens_in"] + row["tokens_out"]),
@@ -821,6 +826,11 @@ def task_list(
             row["goal"][:60],
         )
     console.print(table)
+    if any(r.get("parent_task_id") for r in rows):
+        console.print(
+            "[dim]↳ 表示这是某次扇出或工作流的子任务；"
+            "用 `wukong task tree <父任务 id>` 看整棵树。[/dim]"
+        )
     if any(r["status"] == "running" for r in rows):
         console.print(
             "[dim]`running?` 表示记录说它在跑。如果是崩溃留下的，"
@@ -922,6 +932,9 @@ def task_tree(
     no_budget: bool = typer.Option(
         False, "--no-budget", help="Hide per-node steps / tokens / cost."
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the tree as JSON for scripts instead of a rendering."
+    ),
 ) -> None:
     """显示以某任务为根的任务树（多 Agent 扇出 / 工作流子树）。
 
@@ -942,6 +955,11 @@ def task_tree(
     if root is None:
         err_console.print(f"unknown task {task_id}")
         raise typer.Exit(1)
+
+    if as_json:
+        # Plain JSON, no rich markup: this is the form scripts consume.
+        typer.echo(json.dumps(root.as_dict(), ensure_ascii=False, indent=2))
+        return
 
     show_budget = not no_budget
 

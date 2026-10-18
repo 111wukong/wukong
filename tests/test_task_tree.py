@@ -177,6 +177,27 @@ class TestRender:
             store.close()
 
 
+class TestAsDict:
+    def test_as_dict_is_the_json_shape_scripts_consume(self, tmp_path: Path) -> None:
+        """`wukong task tree --json` emits this; the shape must be stable."""
+        store = Store(tmp_path / "tree.db")
+        try:
+            root = _leaf(store, goal="survey", tokens_in=10, tokens_out=5)
+            child = _leaf(store, goal="child", parent=root, tokens_in=100, tokens_out=50)
+
+            data = build_task_tree(store, root).as_dict()
+
+            assert data["id"] == root
+            assert data["goal"] == "survey"
+            assert data["tokens_in"] == 10
+            assert len(data["children"]) == 1
+            assert data["children"][0]["id"] == child
+            assert data["children"][0]["tokens_in"] == 100
+            assert data["children"][0]["children"] == []
+        finally:
+            store.close()
+
+
 # ---------------------------------------------------------------------------
 # real-run path: an actual multi-agent fan-out is readable as a tree
 # ---------------------------------------------------------------------------
