@@ -8,6 +8,10 @@ on:
   push:
     tags: ["v*"]
 
+# `gh release upload` writes to the release, so the token needs write access.
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,8 +26,10 @@ jobs:
         include:
           - os: macos-latest
             artifact: wukong-macos
+            asset: dist/wukong-*.dmg
           - os: windows-latest
             artifact: wukong-windows
+            asset: dist/wukong.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -54,3 +60,13 @@ jobs:
             dist/*.dmg
             dist/*.exe
           if-no-files-found: error
+
+      - name: Attach to the release
+        # A tag build should leave both installers on the release page, not
+        # only in the workflow's artifact list. `shell: bash` is Git Bash on
+        # Windows, so the `dist/*.dmg` glob behaves the same on both runners.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" ${{ matrix.asset }} --clobber
