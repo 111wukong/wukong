@@ -49,11 +49,16 @@ datas = [(str(ROOT / "src" / "wukong" / "api" / "console"), "wukong/api/console"
 datas += webview_datas + vec_datas
 binaries = webview_binaries + vec_binaries
 
+# Every module of the package, not a hand-picked list. Providers
+# (`wukong.models.openai_compat`, `anthropic`, `mock`), sandbox backends and
+# tools are imported *by name* at runtime, so static analysis cannot see them;
+# a bundle that omits one starts and then dies on the first model build. The
+# package is the app, so all of it belongs in the bundle.
 hiddenimports = (
-    collect_submodules("uvicorn")
+    collect_submodules("wukong")
+    + collect_submodules("uvicorn")
     + webview_hidden
     + vec_hidden
-    + ["wukong.api.app", "wukong.desktop.launcher", "wukong.desktop.__main__"]
 )
 
 a = Analysis(

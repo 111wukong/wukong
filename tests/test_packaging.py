@@ -28,6 +28,14 @@ def test_the_spec_bundles_the_console_static_files() -> None:
     assert (ROOT / "src" / "wukong" / "api" / "console" / "index.html").is_file()
 
 
+def test_the_spec_collects_the_packages_submodules() -> None:
+    """Providers (`wukong.models.openai_compat`, ...) are imported by name at
+    runtime, so static analysis misses them. A bundle that omits one starts
+    and then dies on the first model build."""
+    text = SPEC.read_text(encoding="utf-8")
+    assert 'collect_submodules("wukong")' in text
+
+
 def test_the_entry_and_build_script_are_valid_python() -> None:
     for path in (BUILD, ENTRY):
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
