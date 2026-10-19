@@ -58,9 +58,14 @@ def make_png(width: int = 4, height: int = 4) -> bytes:
 
 
 class TestWireFormat:
-    def test_a_user_message_with_images_becomes_parts(self) -> None:
+    def test_a_user_message_with_images_becomes_parts(self, tmp_path) -> None:  # noqa: ANN001
         """OpenAI's multimodal shape, not a string with a URL in it."""
-        ref = ImageRef(path="/tmp/wk-img-test.png", media_type="image/png")
+        # The ref reads its bytes from disk, so the file must exist. A fixed
+        # `/tmp` path made this pass only where a previous run had left one
+        # behind -- green locally, red on CI.
+        image = tmp_path / "img.png"
+        image.write_bytes(make_png())
+        ref = ImageRef(path=str(image), media_type="image/png")
         body = Message(role="user", content="look at this", images=[ref]).to_provider_dict()
         content = body["content"]
         assert content[0] == {"type": "text", "text": "look at this"}
