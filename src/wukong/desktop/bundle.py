@@ -341,18 +341,16 @@ def build_app_bundle(
 ) -> BundleResult:
     """Create `<name>.app` under `target_dir`."""
     if frozen:
-        # Checked before the platform gate: "PyInstaller is not wired up" is
-        # true on every platform, and reporting the platform first would send
-        # a Linux user chasing the wrong problem.
+        # Checked before the platform gate: the frozen path is platform-neutral
+        # (PyInstaller cannot cross-compile), and reporting the platform first
+        # would send a Linux user chasing the wrong problem.
         raise BundleError(
-            "frozen bundles need PyInstaller, which is not wired up here. "
-            "Install it and build with:\n"
-            "  pip install pyinstaller\n"
-            "  pyinstaller --windowed --name "
-            f"{name} --collect-all webview "
-            f"--osx-bundle-identifier {BUNDLE_ID} "
-            "$(python -c 'import wukong,os;print(os.path.dirname("
-            "wukong.__file__))')/desktop/__main__.py"
+            "frozen bundles are built by the packaging pipeline, not this "
+            "function: PyInstaller cannot cross-compile, so each OS builds its "
+            "own artifact. From the repo root run:\n"
+            "  pip install pyinstaller pywebview\n"
+            "  python packaging/build.py\n"
+            "See docs/packaging.md (macOS: .app + .dmg; Windows: .exe)."
         )
     if sys.platform != "darwin":
         raise BundleError(

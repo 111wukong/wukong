@@ -1,0 +1,56 @@
+name: release
+
+# Packaging is a separate workflow from CI on purpose: PyInstaller on macOS and
+# Windows takes minutes and needs a GUI toolchain, which would make every pull
+# request pay for a build it does not use. Run this on a tag or by hand.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: wukong-macos
+          - os: windows-latest
+            artifact: wukong-windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        # `[all]` pulls fastapi/uvicorn (the console) and pywebview (the native
+        # window). PyInstaller is a build tool, not a runtime dependency.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all]" pyinstaller
+
+      - name: Build
+        # PyInstaller cannot cross-compile; each runner builds its own artifact.
+        # `--sign` ad-hoc signs the macOS .app so Gatekeeper lets a downloaded
+        # build open. A real release would use a Developer ID + notarization.
+        run: python packaging/build.py --sign
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+          if-no-files-found: error

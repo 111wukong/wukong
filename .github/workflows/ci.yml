@@ -58,7 +58,7 @@ jobs:
           assert a == 'sqlite-vec', f'expected sqlite-vec, got {a!r}'"
 
       - name: Lint
-        run: ruff check src tests examples
+        run: ruff check src tests examples packaging
 
       - name: Test
         # One pass, three jobs: run the suite, enforce the coverage floor, and

@@ -106,6 +106,14 @@ wukong sandbox                               # 报告进程隔离实际是否生
 
 ---
 
+## 打包成桌面应用
+
+`python packaging/build.py` 产出一个**自包含**应用：macOS 上是 `dist/wukong.app` + `dist/wukong-<version>.dmg`，Windows 上是单个 `dist/wukong.exe`。用户不需要装 Python，也不需要 `pip install`。
+
+PyInstaller 不能跨平台编译，所以在哪个系统跑就出哪个平台的包；`.github/workflows/release.yml` 用 `macos-latest` / `windows-latest` 两个 runner 各建各的。控制台静态资源、uvicorn 的动态子模块、pywebview 都会被打进包里；`skills/` 这类用户数据不进包。已知边界（签名、体积）见 [`docs/packaging.md`](docs/packaging.md)。
+
+---
+
 ## 它是什么，不是什么
 
 **是**：一个有状态的 Agent 运行时。任务可中断、可恢复、可审计，工具权限可强制，上下文有预算，技能可沉淀，改动可逐块审查，完成可被验证。
