@@ -33,6 +33,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Start and stop the server without a window (used by tests/CI).",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Keep serving the console without opening a window (headless).",
+    )
     args = parser.parse_args(argv)
 
     from wukong.config import ConfigError, load_settings
@@ -55,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
             size=(args.width, args.height),
             debug=args.debug,
             headless_check=args.check,
+            serve_forever=args.serve,
+            require_token=not args.no_token,
         )
     except DesktopUnavailable as exc:
         # Printed, not raised: a double-clicked app has no console to show a

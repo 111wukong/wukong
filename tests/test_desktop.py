@@ -131,6 +131,13 @@ class TestServerLifecycle:
         assert handle.console_url == "http://127.0.0.1:1234/#abc"
         assert "?token=" not in handle.console_url
 
+    def test_console_url_without_a_token_has_no_fragment(self) -> None:
+        """`--no-token` used to pass None into an f-string, producing `#None`
+        in the printed URL while the server still required a token."""
+        handle = ServerHandle(host="127.0.0.1", port=1234, token=None)
+        assert handle.console_url == "http://127.0.0.1:1234/"
+        assert "None" not in handle.console_url
+
 
 class TestAvailabilityReporting:
     def test_reports_either_ready_or_a_reason(self) -> None:

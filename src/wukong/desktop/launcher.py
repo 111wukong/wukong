@@ -85,7 +85,7 @@ class ServerHandle:
 
     host: str
     port: int
-    token: str
+    token: str | None
     _server: Any = None
     _thread: threading.Thread | None = field(default=None, repr=False)
 
@@ -97,7 +97,11 @@ class ServerHandle:
     def console_url(self) -> str:
         # The token goes in the fragment, not the query string: fragments are
         # never sent to the server and never appear in a Referer header, so it
-        # cannot leak through the page itself.
+        # cannot leak through the page itself. With no token there is no
+        # fragment -- and no "#None", which is what an unguarded f-string
+        # produced before.
+        if not self.token:
+            return f"{self.base_url}/"
         return f"{self.base_url}/#{self.token}"
 
     def build_app(self, settings: Any, **kwargs: Any) -> Any:
@@ -189,19 +193,44 @@ def run_desktop(
     size: tuple[int, int] = DEFAULT_WINDOW,
     debug: bool = False,
     headless_check: bool = False,
+    serve_forever: bool = False,
+    require_token: bool = True,
 ) -> int:
     """Start the server, open the window, and block until it closes.
 
     `headless_check=True` starts and stops the server without a window. That
     exists so the lifecycle can be exercised in CI, where there is no display
     -- the window itself is the one part that cannot be verified there.
+
+    `serve_forever=True` keeps the server up and opens no window. A packaged
+    app on a machine without a display (or a smoke test that wants to curl the
+    console) needs exactly that.
+
+    `require_token=False` disables the session token (loopback only, weaker).
+    It exists because `--no-token` used to pass `None` here and this function
+    then generated a token anyway -- the flag was silently ignored.
     """
-    resolved_token = token if token is not None else secrets.token_urlsafe(24)
+    resolved_token = (
+        token
+        if token is not None
+        else (secrets.token_urlsafe(24) if require_token else None)
+    )
     handle = ServerHandle(host="127.0.0.1", port=pick_port(port), token=resolved_token)
     handle.start(handle.build_app(settings))
 
     if headless_check:
         handle.stop()
+        return 0
+
+    if serve_forever:
+        print(f"console: {handle.console_url}", flush=True)
+        try:
+            while handle._thread is not None and handle._thread.is_alive():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            handle.stop()
         return 0
 
     try:

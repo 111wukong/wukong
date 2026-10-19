@@ -2366,6 +2366,7 @@ def desktop(
             size=(width, height),
             debug=debug,
             headless_check=check,
+            require_token=not no_token,
         )
     except DesktopUnavailable as exc:
         err_console.print(escape(str(exc)))
