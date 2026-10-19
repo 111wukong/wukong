@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -67,7 +68,25 @@ def build_icon() -> None:
         print(f"icon: {result.path}")
 
 
+def clear_previous() -> None:
+    """Move the previous artifacts aside instead of letting PyInstaller delete them.
+
+    PyInstaller's COLLECT removes the old output directory, and some
+    environments refuse (or prompt for) a recursive delete of a directory with
+    hundreds of files. A rename is one filesystem operation, and it leaves the
+    previous build recoverable under ``build/previous/``.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    aside = ROOT / "build" / "previous" / stamp
+    for name in ("wukong", "wukong.app"):
+        path = DIST / name
+        if path.exists():
+            aside.mkdir(parents=True, exist_ok=True)
+            path.rename(aside / name)
+
+
 def run_pyinstaller() -> None:
+    clear_previous()
     cmd = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", str(SPEC)]
     print("+", " ".join(cmd))
     subprocess.run(cmd, cwd=ROOT, check=True)

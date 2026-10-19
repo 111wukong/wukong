@@ -63,6 +63,14 @@ hdiutil attach dist/wukong-*.dmg
 
 `--check` 走的是真实服务器生命周期（建 app、监听、退出），不需要显示器，所以无头环境也能验。
 
+`--serve` 保持服务器运行、不开窗口，并打印控制台地址——没有显示器的机器用它，打包冒烟测试也用它：
+
+```bash
+dist/wukong.app/Contents/MacOS/wukong --serve --token t
+# console: http://127.0.0.1:<port>/#t
+curl -s -H 'X-WUKONG-Token: t' http://127.0.0.1:<port>/api/v1/health
+```
+
 ## 已知边界
 
 - **未签名/未公证**：macOS 首次打开会提示「无法验证开发者」，右键 → 打开即可；正式分发需要 Apple 开发者证书。Windows 的 SmartScreen 同理。

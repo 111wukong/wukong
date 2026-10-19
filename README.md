@@ -101,6 +101,7 @@ wukong task tree <task_id>                   # 看多 Agent 扇出：以该任�
 wukong task tree <task_id> --json            # 同一棵树，JSON 形式（给脚本消费）
 wukong a2a card                              # 会发布的 Agent Card
 wukong desktop                               # 原生窗口（系统 webview，不是 Electron）
+wukong desktop --serve                       # 无窗口，只跑服务器并打印控制台地址
 wukong sandbox                               # 报告进程隔离实际是否生效
 ```
 
